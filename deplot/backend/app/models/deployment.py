@@ -1,0 +1,77 @@
+from datetime import datetime
+from enum import StrEnum
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, Field
+
+
+class DeploymentStage(StrEnum):
+    QUEUED = "queued"
+    BUILDING = "building"
+    INSTALLING = "installing"
+    UPLOADING = "uploading"
+    CREATING_RUNTIME = "creating_runtime"
+    PROVISIONING_DB = "provisioning_db"
+    READINESS_CHECK = "readiness_check"
+    COMPLETE = "complete"
+    FAILED = "failed"
+
+
+class DeploymentStatus(StrEnum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class ZeropsConfig(BaseModel):
+    zerops_yaml: str
+    import_yaml: str
+    services: list[str] = Field(default_factory=list)
+
+
+class DeploymentPlanService(BaseModel):
+    name: str
+    type: str
+    estimated_ram_gb: float = 0.5
+    estimated_cpu: float = 1.0
+
+
+class DeploymentPlan(BaseModel):
+    services: list[DeploymentPlanService] = Field(default_factory=list)
+    estimated_cost_usd_month: float = 0.0
+    estimated_build_minutes: int = 5
+
+
+class DeploymentScore(BaseModel):
+    security: float = 0.0
+    performance: float = 0.0
+    scalability: float = 0.0
+    reliability: float = 0.0
+    observability: float = 0.0
+    recommendations: list[str] = Field(default_factory=list)
+
+
+class Deployment(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    session_id: UUID
+    zerops_project_id: str | None = None
+    live_url: str | None = None
+    stage: DeploymentStage = DeploymentStage.QUEUED
+    status: DeploymentStatus = DeploymentStatus.PENDING
+    plan: DeploymentPlan | None = None
+    config: ZeropsConfig | None = None
+    score: DeploymentScore | None = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class DeployRequest(BaseModel):
+    session_id: UUID
+    demo_mode: bool = False
+
+
+class DeployResponse(BaseModel):
+    deployment_id: UUID
+    status: DeploymentStatus
+    stage: DeploymentStage

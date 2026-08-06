@@ -1,0 +1,17 @@
+zerops:
+  - setup: api
+    build:
+      base: python@latest
+      buildCommands:
+        - pip install -e .
+      deployFiles: ./
+    run:
+      base: python@latest
+      ports:
+        - port: 8000
+          httpSupport: true
+      readiness:
+        http:
+          path: /api/v1/health
+          statusCode: 200
+      start: uvicorn app.main:app --host 0.0.0.0 --port 8000

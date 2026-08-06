@@ -1,0 +1,15 @@
+zerops:
+  - setup: web
+    build:
+      base: nodejs@22
+      buildCommands:
+        - npm ci
+        - npm run build
+      deployFiles: ./
+      cache: node_modules
+    run:
+      base: nodejs@22
+      ports:
+        - port: 3000
+          httpSupport: true
+      start: npm start
