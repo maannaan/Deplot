@@ -36,6 +36,22 @@ export function StepPanel({
   );
 }
 
+export function PreviewBanner() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mb-6 rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3"
+    >
+      <p className="text-sm text-amber-200/90">
+        <span className="font-semibold">Preview mode</span> — sample layout only. Run{" "}
+        <span className="text-white">Analyze Repository</span> from Connect to unlock live data
+        and actions.
+      </p>
+    </motion.div>
+  );
+}
+
 export function StatCard({
   label,
   value,

@@ -3,7 +3,7 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Repo root: deplot/ (parent of backend/)
+# Repo root (parent of backend/)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 

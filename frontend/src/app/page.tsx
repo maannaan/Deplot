@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
-import { ScoreRing, StatCard, StepPanel } from "@/components/wizard/step-panel";
+import { PreviewBanner, ScoreRing, StatCard, StepPanel } from "@/components/wizard/step-panel";
 import { WIZARD_STEPS, getStepIndex, type WizardStepId } from "@/config/wizard-steps";
 import { api } from "@/lib/api";
 
@@ -20,6 +20,37 @@ const DEPLOY_STAGES = [
   "Running readiness check",
   "Deployment complete",
 ];
+
+const DEMO_STACK = {
+  framework: "nextjs",
+  runtime: "nodejs@22",
+  database: "postgresql",
+  cache: "valkey",
+};
+
+const DEMO_PLAN = {
+  estimated_cost_usd_month: 25.5,
+  estimated_build_minutes: 6,
+  services: [{ name: "frontend" }, { name: "api" }, { name: "database" }],
+};
+
+const DEMO_YAML = {
+  import: `# Preview — Import YAML\nproject:\n  name: demo-app\nservices:\n  - hostname: postgres\n    type: postgresql@16\n  - hostname: api\n    type: nodejs@22`,
+  zerops: `# Preview — zerops.yaml\nrun:\n  start: npm start\n  ports:\n    - port: 3000\n      httpSupport: true\nreadiness:\n  path: /\n  statusCode: 200`,
+};
+
+const DEMO_SCORE = {
+  security: 9.2,
+  performance: 8.7,
+  scalability: 8.9,
+  reliability: 9.4,
+  observability: 7.8,
+};
+
+const DEMO_INCIDENT = {
+  title: "Backend cannot start — migration failed",
+  diagnosis: { root_cause: "DATABASE_URL environment variable is missing" },
+};
 
 export default function HomePage() {
   const [step, setStep] = useState<WizardStepId>("connect");
@@ -37,16 +68,17 @@ export default function HomePage() {
   const [deployStage, setDeployStage] = useState(0);
   const [maxReachedIndex, setMaxReachedIndex] = useState(0);
 
-  useEffect(() => {
-    setMaxReachedIndex((prev) => Math.max(prev, getStepIndex(step)));
-  }, [step]);
+  const advanceToStep = useCallback((id: WizardStepId) => {
+    const idx = getStepIndex(id);
+    setMaxReachedIndex((prev) => Math.max(prev, idx));
+    setStep(id);
+  }, []);
 
-  const goToStep = useCallback(
-    (id: WizardStepId) => {
-      if (getStepIndex(id) <= maxReachedIndex) setStep(id);
-    },
-    [maxReachedIndex],
-  );
+  const goToStep = useCallback((id: WizardStepId) => {
+    setStep(id);
+  }, []);
+
+  const isPreviewStep = getStepIndex(step) > maxReachedIndex;
 
   const runAnalyze = useCallback(async () => {
     setLoading(true);
@@ -55,7 +87,7 @@ export default function HomePage() {
       const res = await api.analyze(demoMode ? null : repoUrl || null, demoMode);
       setSessionId(res.session_id);
       setStack(res.stack);
-      setStep("analyze");
+      advanceToStep("analyze");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Analyze failed");
     } finally {
@@ -68,7 +100,7 @@ export default function HomePage() {
     setLoading(true);
     try {
       setPlan(await api.getPlan(sessionId));
-      setStep("plan");
+      advanceToStep("plan");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Plan failed");
     } finally {
@@ -82,7 +114,7 @@ export default function HomePage() {
     try {
       const data = await api.generateYaml(sessionId);
       setYaml({ zerops: data.zerops_yaml, import: data.import_yaml });
-      setStep("configure");
+      advanceToStep("configure");
     } catch (e) {
       setError(e instanceof Error ? e.message : "YAML generation failed");
     } finally {
@@ -102,7 +134,7 @@ export default function HomePage() {
       const res = await api.deploy(sessionId, demoMode);
       setDeploymentId(res.deployment_id);
       setDeployStage(DEPLOY_STAGES.length - 1);
-      setStep("deploy");
+      advanceToStep("deploy");
       if (demoMode) {
         setIncidents((await api.listIncidents(res.deployment_id)) as Record<string, unknown>[]);
       }
@@ -118,7 +150,7 @@ export default function HomePage() {
     setLoading(true);
     try {
       setScore(await api.getScore(deploymentId));
-      setStep("score");
+      advanceToStep("score");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Score failed");
     } finally {
@@ -126,12 +158,17 @@ export default function HomePage() {
     }
   }, [deploymentId]);
 
-  const stackFields = stack
+  const activeStack = stack ?? (isPreviewStep && step === "analyze" ? DEMO_STACK : null);
+  const activePlan = plan ?? (isPreviewStep && step === "plan" ? DEMO_PLAN : null);
+  const activeYaml = yaml ?? (isPreviewStep && step === "configure" ? DEMO_YAML : null);
+  const activeScore = score ?? (isPreviewStep && step === "score" ? DEMO_SCORE : null);
+
+  const stackFields = activeStack
     ? [
-        { label: "Framework", value: String(stack.framework ?? "—"), icon: "⚡" },
-        { label: "Runtime", value: String(stack.runtime ?? "—"), icon: "🟢" },
-        { label: "Database", value: String(stack.database ?? "—"), icon: "🗄️" },
-        { label: "Cache", value: String(stack.cache ?? "None"), icon: "⚡" },
+        { label: "Framework", value: String(activeStack.framework ?? "—"), icon: "⚡" },
+        { label: "Runtime", value: String(activeStack.runtime ?? "—"), icon: "🟢" },
+        { label: "Database", value: String(activeStack.database ?? "—"), icon: "🗄️" },
+        { label: "Cache", value: String(activeStack.cache ?? "None"), icon: "⚡" },
       ]
     : [];
 
@@ -201,19 +238,25 @@ export default function HomePage() {
               </StepPanel>
             )}
 
-            {step === "analyze" && stack && (
+            {step === "analyze" && activeStack && (
               <StepPanel
                 title="Stack detected"
                 subtitle="AI identified your application stack and infrastructure requirements."
                 badge="Repository Intelligence"
               >
+                {isPreviewStep && <PreviewBanner />}
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   {stackFields.map((f, i) => (
                     <StatCard key={f.label} {...f} delay={i * 0.08} />
                   ))}
                 </div>
                 <div className="mt-6 flex gap-3">
-                  <Button onClick={() => setStep("architecture")}>View Architecture</Button>
+                  <Button
+                    onClick={() => advanceToStep("architecture")}
+                    disabled={isPreviewStep}
+                  >
+                    View Architecture
+                  </Button>
                 </div>
               </StepPanel>
             )}
@@ -224,6 +267,7 @@ export default function HomePage() {
                 subtitle="Proposed multi-service topology for Zerops private networking."
                 badge="Architecture Builder"
               >
+                {isPreviewStep && <PreviewBanner />}
                 <Card>
                   <div className="flex flex-wrap items-center justify-center gap-4 py-8">
                     {["Frontend", "API", "PostgreSQL", "Redis"].map((node, i) => (
@@ -254,56 +298,58 @@ export default function HomePage() {
                   </div>
                 </Card>
                 <div className="mt-6">
-                  <Button onClick={loadPlan} loading={loading}>
+                  <Button onClick={loadPlan} loading={loading} disabled={isPreviewStep}>
                     Deployment Plan
                   </Button>
                 </div>
               </StepPanel>
             )}
 
-            {step === "plan" && plan && (
+            {step === "plan" && activePlan && (
               <StepPanel
                 title="Deployment plan"
                 subtitle="Estimated resources, cost, and build time before you deploy."
                 badge="Deployment Planner"
               >
+                {isPreviewStep && <PreviewBanner />}
                 <div className="grid gap-4 sm:grid-cols-3">
                   <StatCard
                     label="Est. monthly cost"
-                    value={`$${plan.estimated_cost_usd_month ?? "—"}`}
+                    value={`$${activePlan.estimated_cost_usd_month ?? "—"}`}
                     icon="💰"
                   />
                   <StatCard
                     label="Build time"
-                    value={`${plan.estimated_build_minutes ?? "—"} min`}
+                    value={`${activePlan.estimated_build_minutes ?? "—"} min`}
                     icon="⏱️"
                   />
                   <StatCard
                     label="Services"
-                    value={String((plan.services as unknown[])?.length ?? 0)}
+                    value={String((activePlan.services as unknown[])?.length ?? 0)}
                     icon="📦"
                   />
                 </div>
                 <div className="mt-6">
-                  <Button onClick={loadYaml} loading={loading}>
+                  <Button onClick={loadYaml} loading={loading} disabled={isPreviewStep}>
                     Generate Zerops Config
                   </Button>
                 </div>
               </StepPanel>
             )}
 
-            {step === "configure" && yaml && (
+            {step === "configure" && activeYaml && (
               <StepPanel
                 title="Zerops configuration"
                 subtitle="Import YAML + zerops.yaml generated from your repository analysis."
                 badge="Zerops Native"
               >
+                {isPreviewStep && <PreviewBanner />}
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <YamlPreview title="import.yaml" content={yaml.import} />
-                  <YamlPreview title="zerops.yaml" content={yaml.zerops} />
+                  <YamlPreview title="import.yaml" content={activeYaml.import} />
+                  <YamlPreview title="zerops.yaml" content={activeYaml.zerops} />
                 </div>
                 <div className="mt-6">
-                  <Button onClick={runDeploy} loading={loading}>
+                  <Button onClick={runDeploy} loading={loading} disabled={isPreviewStep}>
                     Deploy to Zerops
                   </Button>
                 </div>
@@ -316,6 +362,7 @@ export default function HomePage() {
                 subtitle="Real-time pipeline status from build to readiness check."
                 badge="Deployment Engine"
               >
+                {isPreviewStep && <PreviewBanner />}
                 <Card>
                   <ul className="space-y-3">
                     {DEPLOY_STAGES.map((s, i) => (
@@ -359,7 +406,9 @@ export default function HomePage() {
                 </Card>
                 {!loading && (
                   <div className="mt-6">
-                    <Button onClick={() => setStep("operate")}>Open Observability</Button>
+                    <Button onClick={() => advanceToStep("operate")} disabled={isPreviewStep}>
+                      Open Observability
+                    </Button>
                   </div>
                 )}
               </StepPanel>
@@ -371,6 +420,7 @@ export default function HomePage() {
                 subtitle="Unified metrics, logs, and health — AIOps is watching."
                 badge="Observability Layer"
               >
+                {isPreviewStep && <PreviewBanner />}
                 <div className="grid gap-4 sm:grid-cols-3">
                   <StatCard label="CPU" value="12.5%" icon="📊" delay={0} />
                   <StatCard label="Memory" value="256 MB" icon="💾" delay={0.08} />
@@ -384,7 +434,9 @@ export default function HomePage() {
                   <span className="text-sm text-zinc-400">No incidents — monitoring active</span>
                 </div>
                 <div className="mt-6">
-                  <Button onClick={() => setStep("incidents")}>View Incidents</Button>
+                  <Button onClick={() => advanceToStep("incidents")} disabled={isPreviewStep}>
+                    View Incidents
+                  </Button>
                 </div>
               </StepPanel>
             )}
@@ -395,7 +447,8 @@ export default function HomePage() {
                 subtitle="Detect, diagnose, and remediate production failures."
                 badge="AIOps Engine"
               >
-                {incidents.length === 0 ? (
+                {isPreviewStep && <PreviewBanner />}
+                {incidents.length === 0 && !isPreviewStep ? (
                   <Card className="text-center">
                     <p className="text-emerald-400">✓ No active incidents</p>
                     <p className="mt-2 text-sm text-zinc-500">
@@ -403,7 +456,7 @@ export default function HomePage() {
                     </p>
                   </Card>
                 ) : (
-                  incidents.map((inc, i) => (
+                  (isPreviewStep ? [DEMO_INCIDENT] : incidents).map((inc, i) => (
                     <Card key={i} delay={i * 0.1} className="mb-4 border-red-500/20">
                       <div className="flex items-start justify-between">
                         <div>
@@ -422,21 +475,22 @@ export default function HomePage() {
                   ))
                 )}
                 <div className="mt-6">
-                  <Button onClick={loadScore} loading={loading}>
+                  <Button onClick={loadScore} loading={loading} disabled={isPreviewStep}>
                     Deployment Score
                   </Button>
                 </div>
               </StepPanel>
             )}
 
-            {step === "score" && score && (
+            {step === "score" && activeScore && (
               <StepPanel
                 title="Deployment score"
                 subtitle="Production readiness across security, performance, and reliability."
                 badge="Optimization Advisor"
               >
+                {isPreviewStep && <PreviewBanner />}
                 <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
-                  {Object.entries(score).map(
+                  {Object.entries(activeScore).map(
                     ([k, v], i) =>
                       typeof v === "number" && (
                         <ScoreRing key={k} label={k} value={v} delay={i * 0.08} />

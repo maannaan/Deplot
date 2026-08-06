@@ -231,25 +231,25 @@ export function Sidebar({
                               {steps.map((s) => {
                                 const idx = getStepIndex(s.id);
                                 const isActive = step === s.id;
-                                const isDone = idx <= maxReachedIndex && !isActive;
-                                const isReachable = idx <= maxReachedIndex;
+                                const isUnlocked = idx <= maxReachedIndex;
+                                const isPreview = idx > maxReachedIndex;
+                                const isDone = isUnlocked && !isActive;
                                 const isHovered = hoveredStep === s.id;
 
                                 return (
                                   <motion.button
                                     key={s.id}
                                     type="button"
-                                    disabled={!isReachable}
-                                    onClick={() => isReachable && onStepChange(s.id)}
+                                    onClick={() => onStepChange(s.id)}
                                     onMouseEnter={() => setHoveredStep(s.id)}
                                     onMouseLeave={() => setHoveredStep(null)}
-                                    whileHover={isReachable ? { x: 4 } : {}}
-                                    whileTap={isReachable ? { scale: 0.98 } : {}}
+                                    whileHover={{ x: 4 }}
+                                    whileTap={{ scale: 0.98 }}
                                     className={cn(
                                       "group/step relative flex items-center gap-3 rounded-xl py-2 pl-1 pr-2 text-left transition-all",
-                                      !isReachable && "cursor-not-allowed opacity-30",
                                       isActive && "bg-white/[0.06]",
-                                      !isActive && isReachable && "hover:bg-white/[0.03]",
+                                      !isActive && "hover:bg-white/[0.03]",
+                                      isPreview && !isActive && "opacity-70",
                                     )}
                                   >
                                     {/* Node on rail */}
@@ -266,11 +266,14 @@ export function Sidebar({
                                               phase.accent,
                                             ),
                                           isDone && !isActive && "border-emerald-500/60 bg-emerald-500/30",
-                                          !isDone &&
+                                          isPreview &&
                                             !isActive &&
-                                            isReachable &&
+                                            "border-dashed border-amber-500/40 bg-amber-500/10",
+                                          isUnlocked &&
+                                            !isDone &&
+                                            !isActive &&
+                                            !isPreview &&
                                             "border-zinc-600 bg-zinc-800 group-hover/step:border-zinc-400",
-                                          !isReachable && "border-zinc-800 bg-zinc-900",
                                         )}
                                       />
                                     </span>
@@ -294,6 +297,11 @@ export function Sidebar({
                                         )}
                                       >
                                         {s.label}
+                                        {isPreview && !isActive && (
+                                          <span className="ml-1.5 text-[9px] font-normal uppercase tracking-wider text-amber-500/80">
+                                            preview
+                                          </span>
+                                        )}
                                       </p>
                                       <AnimatePresence>
                                         {(isActive || isHovered) && (

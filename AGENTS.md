@@ -4,18 +4,15 @@
 
 ## Repo layout
 
-Code lives under `deplot/`:
-
 ```
-deplot/
-├── backend/app/     # FastAPI — registry-based services & agents
-├── frontend/src/    # Next.js — config-driven wizard steps
-├── prompts/         # Agent prompts
-├── templates/zerops/
-└── zerops/          # Deplot's own Zerops configs
+backend/app/     # FastAPI — registry-based services & agents
+frontend/src/    # Next.js — config-driven wizard steps
+prompts/         # Agent prompts
+templates/zerops/
+zerops/          # Deplot's own Zerops configs
 ```
 
-See [deplot/README.md](deplot/README.md) for quick start.
+See [README.md](README.md) for quick start.
 
 ## When Implementing
 

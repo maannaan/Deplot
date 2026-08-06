@@ -9,7 +9,7 @@
 ```bash
 # Install zcli — see https://docs.zerops.io/references/zcli
 zcli login
-zcli project service-import --projectId YOUR_PROJECT_ID --file deplot/zerops/import-deplot.yaml
+zcli project service-import zerops/import-deplot-services.yaml -P YOUR_PROJECT_ID
 ```
 
 ## Curated demo repositories
@@ -21,6 +21,6 @@ zcli project service-import --projectId YOUR_PROJECT_ID --file deplot/zerops/imp
 Replace TBD with public repos before hackathon start.
 
 ## Deplot on Zerops
-Deploy using files in `deplot/zerops/`:
+Deploy using files in `zerops/`:
 - `import-deplot.yaml` — provisions web, api, postgres, valkey
 - `zerops-api.yaml` / `zerops-web.yaml` — per-service build configs
