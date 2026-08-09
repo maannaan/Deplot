@@ -3,9 +3,7 @@ zerops:
     build:
       base: nodejs@22
       buildCommands:
-        - cd frontend
-        - npm ci
-        - npm run build
+        - cd frontend && npm ci && npm run build
       deployFiles: frontend/
       cache: frontend/node_modules
     run:
