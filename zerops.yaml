@@ -1,5 +1,4 @@
 # Deplot monorepo — Zerops reads this from repository root.
-# Each service uses the setup block matching its hostname (web / api).
 
 zerops:
   - setup: web
@@ -7,21 +6,27 @@ zerops:
       base: nodejs@22
       buildCommands:
         - cd frontend && npm ci && npm run build
+        - cd frontend && cp -r .next/static .next/standalone/.next/static
+        - cd frontend && mkdir -p .next/standalone/public && (test -d public && cp -r public/. .next/standalone/public/ || true)
       deployFiles:
-        - frontend/~
+        - frontend/.next/standalone/~
       cache:
         - frontend/node_modules
-        - frontend/.next/cache
+    deploy:
+      readinessCheck:
+        httpGet:
+          port: 3000
+          path: /
     run:
       base: nodejs@22
+      envVariables:
+        NODE_ENV: production
+        PORT: 3000
+        HOSTNAME: 0.0.0.0
       ports:
         - port: 3000
           httpSupport: true
-      readiness:
-        http:
-          path: /
-          statusCode: 200
-      start: npm start
+      start: node server.js
 
   - setup: api
     build:
@@ -34,6 +39,11 @@ zerops:
         - templates/
       cache:
         - backend/dependencies
+    deploy:
+      readinessCheck:
+        httpGet:
+          port: 8000
+          path: /api/v1/health
     run:
       base: python@latest
       envVariables:
@@ -41,8 +51,4 @@ zerops:
       ports:
         - port: 8000
           httpSupport: true
-      readiness:
-        http:
-          path: /api/v1/health
-          statusCode: 200
       start: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000

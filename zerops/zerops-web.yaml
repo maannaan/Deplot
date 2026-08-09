@@ -4,18 +4,24 @@ zerops:
       base: nodejs@22
       buildCommands:
         - cd frontend && npm ci && npm run build
+        - cd frontend && cp -r .next/static .next/standalone/.next/static
+        - cd frontend && mkdir -p .next/standalone/public && (test -d public && cp -r public/. .next/standalone/public/ || true)
       deployFiles:
-        - frontend/~
+        - frontend/.next/standalone/~
       cache:
         - frontend/node_modules
-        - frontend/.next/cache
+    deploy:
+      readinessCheck:
+        httpGet:
+          port: 3000
+          path: /
     run:
       base: nodejs@22
+      envVariables:
+        NODE_ENV: production
+        PORT: 3000
+        HOSTNAME: 0.0.0.0
       ports:
         - port: 3000
           httpSupport: true
-      readiness:
-        http:
-          path: /
-          statusCode: 200
-      start: npm start
+      start: node server.js
