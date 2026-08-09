@@ -5,9 +5,6 @@ from app.models.analysis import ArchitectureGraph, StackDetection, ValidationRep
 from app.models.deployment import DeploymentPlan, DeploymentScore, ZeropsConfig
 from app.services.domain import AnalysisService, PlannerService, YamlGeneratorService
 from app.services.gemini import GeminiClient
-from app.services.operations import AIOpsService
-
-
 @register_agent
 class RepositoryAnalyzerAgent(BaseAgent[StackDetection]):
     name = "repository_analyzer"
@@ -64,7 +61,6 @@ class AIOpsAnalystAgent(BaseAgent[AIOpsReport]):
     prompt_file = "aiops_analyst.md"
 
     async def run(self, context: AgentContext) -> AIOpsReport:
-        svc = AIOpsService(self._settings)
         logs = context.payload.get("logs") or []
         stack_summary = context.payload.get("stack_summary", "")
         yaml_excerpt = context.payload.get("yaml_excerpt", "")
@@ -94,12 +90,24 @@ class AIOpsAnalystAgent(BaseAgent[AIOpsReport]):
                 observability_gaps=report.get("observability_gaps") or [],
             )
 
+        # Demo diagnosis is only for scripted Demo Mode (create_incident). Live path stays honest.
         return AIOpsReport(
-            diagnosis=svc.DEMO_DIAGNOSIS,
-            runbook=svc.DEMO_RUNBOOK,
+            diagnosis=Diagnosis(
+                root_cause="AI diagnosis unavailable",
+                reason="Gemini did not return a structured report (quota, network, or empty response)",
+                impact="Manual inspection of Zerops logs is required before applying a fix",
+                confidence=0.0,
+                suggested_fix="Open Zerops GUI → failed service → Logs, then retry Diagnose",
+                log_summary=("\n".join(logs[-3:]) if logs else "No logs available"),
+            ),
+            runbook=[
+                "Open the deploy sandbox project in Zerops GUI",
+                "Inspect pipeline and runtime logs for the failing service",
+                "Retry Diagnose once Gemini quota is available",
+            ],
             remediation=Remediation(
-                description="Add DATABASE_URL to api service",
-                env_changes={"DATABASE_URL": "postgresql://user:pass@postgres:5432/app"},
+                description="Inspect Zerops logs and apply the suggested env or config fix manually",
+                env_changes={},
             ),
             observability_gaps=["Enable readiness checks on all runtime services"],
         )

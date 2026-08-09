@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -53,19 +54,25 @@ class ZeropsService(BaseService):
     def __init__(self, settings) -> None:
         self._settings = settings
 
-    def _zcli_path(self) -> str:
+    def _zcli_path(self) -> str | None:
         if self._settings.zcli_path and Path(self._settings.zcli_path).exists():
             return self._settings.zcli_path
-        default = Path.home() / ".zerops" / "bin" / "zcli.exe"
-        if default.exists():
-            return str(default)
-        found = shutil.which("zcli")
-        if found:
-            return found
-        return "zcli"
+        candidates = [
+            Path.home() / ".local" / "bin" / "zcli",
+            Path.home() / ".zerops" / "bin" / "zcli",
+            Path.home() / ".zerops" / "bin" / "zcli.exe",
+            Path("/usr/local/bin/zcli"),
+            Path("/opt/homebrew/bin/zcli"),
+        ]
+        for path in candidates:
+            if path.exists():
+                return str(path)
+        return shutil.which("zcli")
 
     def _zcli_env(self) -> dict[str, str]:
         env = os.environ.copy()
+        local_bin = str(Path.home() / ".local" / "bin")
+        env["PATH"] = env.get("PATH", "") + os.pathsep + local_bin
         if self._settings.zerops_api_token:
             env["ZEROPS_TOKEN"] = self._settings.zerops_api_token
         return env
@@ -76,32 +83,59 @@ class ZeropsService(BaseService):
             headers["Authorization"] = f"Bearer {self._settings.zerops_api_token}"
         return headers
 
+    def _run_zcli(self, args: list[str], *, input_text: str | None = None) -> dict:
+        """Cross-platform zcli runner (avoids uvloop asyncio subprocess issues)."""
+        zcli = self._zcli_path()
+        if not zcli:
+            return {
+                "ok": False,
+                "returncode": 127,
+                "stdout": "",
+                "stderr": "zcli not found — install via: curl -L https://zerops.io/zcli/install.sh | sh",
+                "error": "zcli not found",
+            }
+        try:
+            completed = subprocess.run(
+                [zcli, *args],
+                input=input_text,
+                capture_output=True,
+                text=True,
+                env=self._zcli_env(),
+                timeout=180,
+                check=False,
+            )
+        except FileNotFoundError:
+            return {
+                "ok": False,
+                "returncode": 127,
+                "stdout": "",
+                "stderr": f"zcli binary missing at {zcli}",
+                "error": "zcli not found",
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "ok": False,
+                "returncode": 124,
+                "stdout": "",
+                "stderr": "zcli timed out",
+                "error": "zcli timed out",
+            }
+        return {
+            "ok": completed.returncode == 0,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout or "",
+            "stderr": completed.stderr or "",
+        }
+
     async def import_services(self, import_yaml: str, project_id: str) -> dict:
         """Run zcli project service-import with YAML on stdin."""
-        zcli = self._zcli_path()
-        proc = await asyncio.create_subprocess_exec(
-            zcli,
-            "project",
-            "service-import",
-            "-",
-            "-P",
-            project_id,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._zcli_env(),
+        result = await asyncio.to_thread(
+            self._run_zcli,
+            ["project", "service-import", "-", "-P", project_id],
+            input_text=import_yaml,
         )
-        stdout, stderr = await proc.communicate(input=import_yaml.encode("utf-8"))
-        out = stdout.decode("utf-8", errors="replace")
-        err = stderr.decode("utf-8", errors="replace")
-        ok = proc.returncode == 0
-        return {
-            "ok": ok,
-            "returncode": proc.returncode,
-            "stdout": out,
-            "stderr": err,
-            "project_id": project_id,
-        }
+        result["project_id"] = project_id
+        return result
 
     async def deploy(
         self,
@@ -139,24 +173,10 @@ class ZeropsService(BaseService):
     async def trigger_redeploy(self, service_hostname: str, project_id: str | None = None) -> dict:
         """Trigger service redeploy via zcli if available."""
         pid = project_id or self._settings.zerops_target_project_id
-        zcli = self._zcli_path()
-        proc = await asyncio.create_subprocess_exec(
-            zcli,
-            "service",
-            "deploy",
-            service_hostname,
-            "-P",
-            pid or "",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._zcli_env(),
+        return await asyncio.to_thread(
+            self._run_zcli,
+            ["service", "deploy", service_hostname, "-P", pid or ""],
         )
-        stdout, stderr = await proc.communicate()
-        return {
-            "ok": proc.returncode == 0,
-            "stdout": stdout.decode("utf-8", errors="replace"),
-            "stderr": stderr.decode("utf-8", errors="replace"),
-        }
 
     async def get_pipeline_status(
         self, service_hostname: str, project_id: str | None = None

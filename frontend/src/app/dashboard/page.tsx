@@ -30,7 +30,7 @@ export default function DashboardPage() {
   }, [load]);
 
   return (
-    <AppShell view="dashboard" demoMode={true}>
+    <AppShell view="dashboard" demoMode={false}>
       <div className="flex-1 overflow-y-auto p-8">
         {loading && (
           <div className="flex h-64 items-center justify-center">

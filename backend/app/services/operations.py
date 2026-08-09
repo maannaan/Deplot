@@ -28,10 +28,20 @@ class ObservabilityService(BaseService):
         ]
         has_open = bool(incidents)
 
-        if deployment and not deployment.demo_mode and deployment.service_hostnames:
+        if deployment and deployment.demo_mode:
+            return self._demo_snapshot(deployment_id, has_open, incidents)
+
+        if deployment and deployment.service_hostnames:
             return await self._real_snapshot(deployment, incidents, has_open)
 
-        return self._demo_snapshot(deployment_id, has_open, incidents)
+        return ObservabilitySnapshot(
+            deployment_id=deployment_id,
+            metrics=[],
+            health=[],
+            timeline=list_ops_timeline(deployment_id) if deployment else [],
+            log_summary="No Zerops service hostnames yet — complete a live deploy first.",
+            checked_at=datetime.utcnow(),
+        )
 
     async def _real_snapshot(self, deployment, incidents, has_open) -> ObservabilitySnapshot:
         metrics: list[ServiceMetrics] = []
@@ -52,18 +62,19 @@ class ObservabilityService(BaseService):
                 continue
 
             role_logs: list[str] = []
+            raw_metrics = await self._zerops.fetch_metrics(hostname, project_id=project_id)
+            cpu, mem = self._parse_metrics(raw_metrics)
+            if cpu is not None or mem is not None:
+                metrics.append(
+                    ServiceMetrics(
+                        service=role,
+                        cpu_percent=cpu if cpu is not None else 0.0,
+                        memory_mb=mem if mem is not None else 0.0,
+                    )
+                )
             if role in ("frontend", "api"):
-                raw_metrics = await self._zerops.fetch_metrics(hostname, project_id=project_id)
-                cpu, mem = self._parse_metrics(raw_metrics)
-                metrics.append(ServiceMetrics(service=role, cpu_percent=cpu, memory_mb=mem))
                 role_logs = await self._zerops.fetch_logs(hostname, tail=50, project_id=project_id)
                 log_lines.extend(role_logs)
-            else:
-                raw_metrics = await self._zerops.fetch_metrics(hostname, project_id=project_id)
-                cpu, mem = self._parse_metrics(raw_metrics)
-                if cpu == 14.0 and mem == 256.0 and not raw_metrics:
-                    cpu, mem = 12.0, 256.0
-                metrics.append(ServiceMetrics(service=role, cpu_percent=cpu, memory_mb=mem))
 
             health.append(
                 await self._probe_service_health(
@@ -181,12 +192,14 @@ class ObservabilityService(BaseService):
         return tail
 
     @staticmethod
-    def _parse_metrics(raw: list[dict]) -> tuple[float, float]:
+    def _parse_metrics(raw: list[dict]) -> tuple[float | None, float | None]:
         if not raw:
-            return 14.0, 256.0
+            return None, None
         item = raw[0]
-        cpu = float(item.get("cpu") or item.get("cpuPercent") or item.get("cpu_percent") or 14.0)
-        mem = float(item.get("memory") or item.get("memoryMb") or item.get("memory_mb") or 256.0)
+        cpu_raw = item.get("cpu") or item.get("cpuPercent") or item.get("cpu_percent")
+        mem_raw = item.get("memory") or item.get("memoryMb") or item.get("memory_mb")
+        cpu = float(cpu_raw) if cpu_raw is not None else None
+        mem = float(mem_raw) if mem_raw is not None else None
         return cpu, mem
 
     def _demo_snapshot(self, deployment_id, has_open, incidents) -> ObservabilitySnapshot:
@@ -243,13 +256,17 @@ class ObservabilityService(BaseService):
         if persisted:
             return persisted
 
+        # Live path: never invent timeline events — only persisted ops events.
+        if real:
+            return []
+
         now = datetime.utcnow()
         events = [
             TimelineEvent(
                 deployment_id=deployment_id,
                 source="deploy",
                 event_type="import_started",
-                message="Zerops service import initiated" if real else "Build pipeline initialized",
+                message="Build pipeline initialized",
                 service="platform",
                 occurred_at=now - timedelta(minutes=8),
             ),

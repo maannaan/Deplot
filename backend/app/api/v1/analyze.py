@@ -37,10 +37,15 @@ async def analyze_repo(body: AnalyzeRequest):
     orchestrator = get_orchestrator()
 
     files: dict[str, str] = {}
-    if body.demo_mode or not body.repo_url:
+    if body.demo_mode:
         files = _demo_files()
     elif body.repo_url:
         files = await github.fetch_repo_tree(str(body.repo_url))
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="repo_url is required when demo_mode is false",
+        )
 
     stack = await orchestrator.run("repository_analyzer", AgentContext(payload={"files": files}))
     if session.repo_url:

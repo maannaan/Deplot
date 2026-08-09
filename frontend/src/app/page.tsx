@@ -716,13 +716,19 @@ export default function HomePage() {
                 <div className="grid gap-4 sm:grid-cols-3">
                   <StatCard
                     label="API CPU"
-                    value={`${(observability?.metrics as { service: string; cpu_percent: number }[] | undefined)?.find((m) => m.service === "api")?.cpu_percent?.toFixed(1) ?? (healed ? "14.0" : "45.0")}%`}
+                    value={(() => {
+                      const cpu = (observability?.metrics as { service: string; cpu_percent: number }[] | undefined)?.find((m) => m.service === "api")?.cpu_percent;
+                      return cpu != null ? `${cpu.toFixed(1)}%` : "—";
+                    })()}
                     icon="📊"
                     delay={0}
                   />
                   <StatCard
                     label="API Memory"
-                    value={`${Math.round((observability?.metrics as { service: string; memory_mb: number }[] | undefined)?.find((m) => m.service === "api")?.memory_mb ?? (healed ? 256 : 384))} MB`}
+                    value={(() => {
+                      const mem = (observability?.metrics as { service: string; memory_mb: number }[] | undefined)?.find((m) => m.service === "api")?.memory_mb;
+                      return mem != null ? `${Math.round(mem)} MB` : "—";
+                    })()}
                     icon="💾"
                     delay={0.08}
                   />

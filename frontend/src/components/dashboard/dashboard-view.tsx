@@ -61,9 +61,9 @@ export function DashboardView({ data }: { data: DashboardSummary }) {
           <p className="mt-2 max-w-xl text-base text-zinc-400">
             Ship, watch, and heal — all your Zerops deployments in one command center.
           </p>
-          {data.is_demo_baseline && (
-            <p className="mt-2 text-xs text-indigo-400/80">
-              Showing demo baseline — run the deploy wizard to populate live metrics.
+          {data.total_deployments === 0 && data.connected_repos === 0 && (
+            <p className="mt-2 text-xs text-zinc-500">
+              No live activity yet — run the deploy wizard against a real GitHub repo to populate metrics.
             </p>
           )}
         </div>

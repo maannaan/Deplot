@@ -29,6 +29,11 @@ def test_dashboard_summary(client: TestClient) -> None:
     body = res.json()
     assert "connected_repos" in body
     assert "deployment_readiness_score" in body
+    # Empty stores must not invent acme/demo baseline KPIs
+    assert body.get("is_demo_baseline") is False
+    assert body["connected_repos"] == 0
+    assert body["total_deployments"] == 0
+    assert body["live_apps"] == []
 
 
 def test_demo_analyze_session(client: TestClient) -> None:
