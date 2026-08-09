@@ -464,11 +464,11 @@ export default function HomePage() {
                           <h3 className="mt-2 font-semibold text-white">
                             {String(inc.title ?? "Incident")}
                           </h3>
-                          {inc.diagnosis && typeof inc.diagnosis === "object" && (
+                          {typeof inc.diagnosis === "object" && inc.diagnosis !== null ? (
                             <p className="mt-2 text-sm text-zinc-400">
                               {String((inc.diagnosis as Record<string, unknown>).root_cause ?? "")}
                             </p>
-                          )}
+                          ) : null}
                         </div>
                       </div>
                     </Card>
