@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class DeploymentStage(StrEnum):
@@ -51,12 +51,47 @@ class DeploymentScore(BaseModel):
     observability: float = 0.0
     recommendations: list[str] = Field(default_factory=list)
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def overall(self) -> float:
+        return round(
+            (
+                self.security
+                + self.performance
+                + self.scalability
+                + self.reliability
+                + self.observability
+            )
+            / 5,
+            1,
+        )
+
+
+class DeploymentStatusResponse(BaseModel):
+    deployment_id: UUID
+    status: DeploymentStatus
+    stage: DeploymentStage
+    live_url: str | None = None
+    service_urls: dict[str, str] = Field(default_factory=dict)
+    service_hostnames: dict[str, str] = Field(default_factory=dict)
+    routing_checklist: list[str] = Field(default_factory=list)
+    pipeline_state: str | None = None
+    message: str | None = None
+    demo_mode: bool = False
+
 
 class Deployment(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     session_id: UUID
     zerops_project_id: str | None = None
     live_url: str | None = None
+    demo_mode: bool = False
+    repo_slug: str | None = None
+    service_hostnames: dict[str, str] = Field(default_factory=dict)
+    service_urls: dict[str, str] = Field(default_factory=dict)
+    routing_checklist: list[str] = Field(default_factory=list)
+    pipeline_state: str | None = None
+    zerops_message: str | None = None
     stage: DeploymentStage = DeploymentStage.QUEUED
     status: DeploymentStatus = DeploymentStatus.PENDING
     plan: DeploymentPlan | None = None

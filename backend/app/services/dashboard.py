@@ -102,6 +102,8 @@ class DashboardService(BaseService):
         settings = get_settings()
         if settings.zerops_project_id:
             project_ids.add(settings.zerops_project_id)
+        if settings.zerops_deploy_project_id:
+            project_ids.add(settings.zerops_deploy_project_id)
         environments = max(len(project_ids), 1)
 
         service_names: set[str] = set()

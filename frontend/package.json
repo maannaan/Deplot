@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p 3000",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -17,6 +20,7 @@
     "reactflow": "^11.11.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.49.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

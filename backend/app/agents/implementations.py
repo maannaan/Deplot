@@ -1,9 +1,11 @@
 from app.agents.base import AgentContext, BaseAgent
 from app.agents.orchestrator import register_agent
-from app.models.aiops import AIOpsReport
+from app.models.aiops import AIOpsReport, Diagnosis, Remediation
 from app.models.analysis import ArchitectureGraph, StackDetection, ValidationReport
 from app.models.deployment import DeploymentPlan, DeploymentScore, ZeropsConfig
 from app.services.domain import AnalysisService, PlannerService, YamlGeneratorService
+from app.services.gemini import GeminiClient
+from app.services.operations import AIOpsService
 
 
 @register_agent
@@ -14,7 +16,11 @@ class RepositoryAnalyzerAgent(BaseAgent[StackDetection]):
     async def run(self, context: AgentContext) -> StackDetection:
         files = context.payload.get("files", {})
         service = AnalysisService()
-        return service.detect_stack(files)
+        stack = service.detect_stack(files)
+        gemini = GeminiClient(self._settings)
+        if gemini.enabled:
+            stack = await service.enrich_with_llm(stack, files, gemini)
+        return stack
 
 
 @register_agent
@@ -36,7 +42,7 @@ class YamlGeneratorAgent(BaseAgent[ZeropsConfig]):
     async def run(self, context: AgentContext) -> ZeropsConfig:
         stack: StackDetection = context.payload["stack"]
         repo_url = context.payload.get("repo_url")
-        service = YamlGeneratorService(self._settings.templates_dir)
+        service = YamlGeneratorService(self._settings.templates_dir, self._settings.search_heavy_stack)
         return service.generate(stack, repo_url)
 
 
@@ -48,7 +54,7 @@ class DeploymentValidatorAgent(BaseAgent[ValidationReport]):
     async def run(self, context: AgentContext) -> ValidationReport:
         stack: StackDetection = context.payload["stack"]
         config: ZeropsConfig = context.payload["config"]
-        service = YamlGeneratorService(self._settings.templates_dir)
+        service = YamlGeneratorService(self._settings.templates_dir, self._settings.search_heavy_stack)
         return service.validate(stack, config)
 
 
@@ -58,10 +64,35 @@ class AIOpsAnalystAgent(BaseAgent[AIOpsReport]):
     prompt_file = "aiops_analyst.md"
 
     async def run(self, context: AgentContext) -> AIOpsReport:
-        from app.services.operations import AIOpsService
+        svc = AIOpsService(self._settings)
+        logs = context.payload.get("logs") or []
+        stack_summary = context.payload.get("stack_summary", "")
+        yaml_excerpt = context.payload.get("yaml_excerpt", "")
 
-        svc = AIOpsService()
-        from app.models.aiops import Remediation
+        gemini = GeminiClient(self._settings)
+        report = await gemini.analyze_logs(
+            logs=logs,
+            stack_summary=stack_summary,
+            yaml_excerpt=yaml_excerpt,
+        )
+        if report:
+            return AIOpsReport(
+                diagnosis=Diagnosis(
+                    root_cause=report.get("root_cause", "Deployment failure"),
+                    reason=report.get("reason", ""),
+                    impact=report.get("impact", ""),
+                    confidence=float(report.get("confidence", 0.8)),
+                    suggested_fix=report.get("suggested_fix", ""),
+                    log_summary=report.get("log_summary"),
+                ),
+                runbook=report.get("runbook") or [],
+                remediation=Remediation(
+                    description=report.get("suggested_fix", "Apply fix"),
+                    env_changes=report.get("env_changes") or {},
+                    yaml_diff=report.get("yaml_diff"),
+                ),
+                observability_gaps=report.get("observability_gaps") or [],
+            )
 
         return AIOpsReport(
             diagnosis=svc.DEMO_DIAGNOSIS,
@@ -70,7 +101,7 @@ class AIOpsAnalystAgent(BaseAgent[AIOpsReport]):
                 description="Add DATABASE_URL to api service",
                 env_changes={"DATABASE_URL": "postgresql://user:pass@postgres:5432/app"},
             ),
-            observability_gaps=["No readiness check on API", "No Redis cache configured"],
+            observability_gaps=["Enable readiness checks on all runtime services"],
         )
 
 
@@ -80,15 +111,20 @@ class OptimizationAdvisorAgent(BaseAgent[DeploymentScore]):
     prompt_file = "optimization_advisor.md"
 
     async def run(self, context: AgentContext) -> DeploymentScore:
+        from uuid import UUID
+
+        from app.bootstrap import get_service
+
+        deployment_id = context.payload.get("deployment_id")
+        if deployment_id:
+            scoring = get_service("scoring")
+            return await scoring.compute(UUID(str(deployment_id)))
+
         return DeploymentScore(
-            security=9.2,
-            performance=8.7,
-            scalability=8.9,
-            reliability=9.4,
-            observability=7.8,
-            recommendations=[
-                "Add Redis cache for session storage",
-                "Enable readiness checks on all runtime services",
-                "Configure vertical autoscaling for API service",
-            ],
+            security=5.0,
+            performance=5.0,
+            scalability=5.0,
+            reliability=5.0,
+            observability=5.0,
+            recommendations=["No deployment context — run analyze and deploy first"],
         )

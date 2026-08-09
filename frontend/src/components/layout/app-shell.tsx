@@ -30,7 +30,7 @@ export function AppShell({
         onStepChange={onStepChange ?? (() => {})}
         onDemoToggle={onDemoToggle ?? (() => {})}
       />
-      <main className="relative flex flex-1 flex-col overflow-hidden">{children}</main>
+      <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden">{children}</main>
     </div>
   );
 }

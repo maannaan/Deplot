@@ -72,7 +72,7 @@ export function Sidebar({
           </motion.div>
 
           <label className="mt-4 flex cursor-pointer items-center justify-between rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2">
-            <span className="text-[11px] font-medium text-zinc-400">Demo flight path</span>
+            <span className="text-[11px] font-medium text-zinc-400">Scripted demo (fallback)</span>
             <button
               type="button"
               role="switch"

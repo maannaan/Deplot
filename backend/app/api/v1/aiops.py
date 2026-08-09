@@ -6,6 +6,7 @@ from app.agents.orchestrator import AgentContext
 from app.api.deps import get_orchestrator
 from app.bootstrap import get_service
 from app.models.aiops import AIOpsReport, Incident
+from app.services.store import deployment_store, session_store
 
 router = APIRouter()
 
@@ -32,8 +33,33 @@ async def diagnose_incident(incident_id: UUID):
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
+    deployment = deployment_store.get(incident.deployment_id)
+    zerops = get_service("zerops")
+    logs: list[str] = []
+    yaml_excerpt = ""
+    stack_summary = ""
+    if deployment:
+        slug = deployment.repo_slug or "app"
+        logs = await zerops.fetch_logs(
+            f"{slug}-api", tail=100, project_id=deployment.zerops_project_id
+        )
+        if deployment.config:
+            yaml_excerpt = deployment.config.import_yaml[:3000]
+        session = session_store.get(deployment.session_id)
+        if session and session.stack:
+            stack_summary = f"framework={session.stack.framework}, search={session.stack.search}"
+
     orchestrator = get_orchestrator()
-    report: AIOpsReport = await orchestrator.run("aiops_analyst", AgentContext(payload={}))
+    report: AIOpsReport = await orchestrator.run(
+        "aiops_analyst",
+        AgentContext(
+            payload={
+                "logs": logs,
+                "stack_summary": stack_summary,
+                "yaml_excerpt": yaml_excerpt,
+            }
+        ),
+    )
     return await aiops.diagnose(incident, report)
 
 
@@ -44,10 +70,10 @@ async def remediate_incident(incident_id: UUID):
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
-    from app.models.aiops import IncidentStatus
-
-    incident.status = IncidentStatus.REMEDIATING
-    return await aiops.resolve(incident_id) or incident
+    result = await aiops.execute_remediation(incident_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return result
 
 
 @router.post("/logs/analyze", response_model=AIOpsReport)

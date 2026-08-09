@@ -24,8 +24,10 @@ class ServiceMetrics(BaseModel):
 
 class ServiceHealth(BaseModel):
     service: str
+    hostname: str | None = None
     status: str = "unknown"  # healthy | degraded | critical | unknown
     readiness_ok: bool = False
+    pipeline_state: str | None = None
     last_checked_at: datetime | None = None
 
 
@@ -35,3 +37,4 @@ class ObservabilitySnapshot(BaseModel):
     health: list[ServiceHealth] = Field(default_factory=list)
     timeline: list[TimelineEvent] = Field(default_factory=list)
     log_summary: str | None = None
+    checked_at: datetime | None = None

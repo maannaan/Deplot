@@ -36,6 +36,10 @@ class Settings(BaseSettings):
 
     zerops_api_token: str = ""
     zerops_project_id: str = ""
+    zerops_deploy_project_id: str = ""
+    zerops_api_base: str = "https://api.app-prg1.zerops.io/api/rest/public"
+    zcli_path: str = ""
+    search_heavy_stack: bool = True
 
     prompts_dir: Path = REPO_ROOT / "prompts"
     templates_dir: Path = REPO_ROOT / "templates"
@@ -43,10 +47,26 @@ class Settings(BaseSettings):
     demo_mode_enabled: bool = True
     ai_agents_enabled: bool = True
     observability_poll_interval_seconds: int = 30
+    remediation_timeout_seconds: int = 180
+    remediation_poll_interval_seconds: int = 5
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def zerops_target_project_id(self) -> str:
+        """Project used for wizard deploys (customer/showcase repos)."""
+        return self.zerops_deploy_project_id or self.zerops_project_id
+
+    @property
+    def deploy_project_isolated(self) -> bool:
+        """True when deploy sandbox is a separate project from the Deplot platform."""
+        return bool(
+            self.zerops_deploy_project_id
+            and self.zerops_project_id
+            and self.zerops_deploy_project_id != self.zerops_project_id
+        )
 
 
 @lru_cache

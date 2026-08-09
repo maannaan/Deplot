@@ -1,13 +1,21 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { Badge, Card } from "@/components/ui/card";
+import {
+  ArchitectureGraphView,
+  DEMO_ARCHITECTURE,
+  type ArchEdge,
+  type ArchNode,
+} from "@/components/wizard/architecture-graph";
+import { IncidentPanel, type IncidentData } from "@/components/wizard/incident-panel";
+import { OpsTimeline, type OpsTimelineEvent } from "@/components/wizard/ops-timeline";
 import { PreviewBanner, ScoreRing, StatCard, StepPanel } from "@/components/wizard/step-panel";
 import { WIZARD_STEPS, getStepIndex, type WizardStepId } from "@/config/wizard-steps";
-import { api } from "@/lib/api";
+import { api, deploymentStreamUrl } from "@/lib/api";
 
 type Stack = Record<string, unknown> | null;
 
@@ -26,12 +34,13 @@ const DEMO_STACK = {
   runtime: "nodejs@22",
   database: "postgresql",
   cache: "valkey",
+  search: "typesense",
 };
 
 const DEMO_PLAN = {
   estimated_cost_usd_month: 25.5,
   estimated_build_minutes: 6,
-  services: [{ name: "frontend" }, { name: "api" }, { name: "database" }],
+  services: [{ name: "frontend" }, { name: "api" }, { name: "database" }, { name: "cache" }, { name: "search" }],
 };
 
 const DEMO_YAML = {
@@ -45,27 +54,79 @@ const DEMO_SCORE = {
   scalability: 8.9,
   reliability: 9.4,
   observability: 7.8,
+  overall: 8.8,
+  recommendations: [
+    "Enable Zerops subdomain access on web and api after import",
+    "Verify Typesense and Valkey hostnames in API env",
+  ],
 };
 
-const DEMO_INCIDENT = {
+const OBSERVABILITY_POLL_MS = 30_000;
+
+const DEMO_INCIDENT: IncidentData = {
   title: "Backend cannot start — migration failed",
-  diagnosis: { root_cause: "DATABASE_URL environment variable is missing" },
+  severity: "critical",
+  status: "diagnosed",
+  diagnosis: {
+    root_cause: "Prisma migration failed",
+    reason: "DATABASE_URL environment variable is missing",
+    impact: "Backend cannot connect to PostgreSQL",
+    confidence: 0.96,
+    suggested_fix: "Set DATABASE_URL in Zerops api service environment variables",
+    log_summary: "Error: P1001 — Can't reach database server at postgres:5432",
+  },
+  runbook: [
+    "Open Zerops project → api service → Environment variables",
+    "Add DATABASE_URL referencing the postgres service",
+    "Redeploy the api service and wait for readiness check",
+  ],
+  suggested_remediation: {
+    description: "Add DATABASE_URL to api service env",
+    env_changes: { DATABASE_URL: "postgresql://user:pass@postgres:5432/app" },
+    yaml_diff: "+ envVariables:\n+   DATABASE_URL: ${postgres_hostname}",
+  },
 };
 
 export default function HomePage() {
   const [step, setStep] = useState<WizardStepId>("connect");
-  const [demoMode, setDemoMode] = useState(true);
+  const [demoMode, setDemoMode] = useState(false);
   const [repoUrl, setRepoUrl] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [deploymentId, setDeploymentId] = useState<string | null>(null);
   const [stack, setStack] = useState<Stack>(null);
   const [yaml, setYaml] = useState<{ zerops: string; import: string } | null>(null);
   const [plan, setPlan] = useState<Record<string, unknown> | null>(null);
-  const [incidents, setIncidents] = useState<Record<string, unknown>[]>([]);
-  const [score, setScore] = useState<Record<string, number> | null>(null);
+  const [incidents, setIncidents] = useState<IncidentData[]>([]);
+  const [architecture, setArchitecture] = useState<{ nodes: ArchNode[]; edges: ArchEdge[] } | null>(
+    null,
+  );
+  const [observability, setObservability] = useState<Record<string, unknown> | null>(null);
+  const [healed, setHealed] = useState(false);
+  const [remediating, setRemediating] = useState(false);
+  const [score, setScore] = useState<{
+    security: number;
+    performance: number;
+    scalability: number;
+    reliability: number;
+    observability: number;
+    overall?: number;
+    recommendations?: string[];
+  } | null>(null);
+  const [validation, setValidation] = useState<{
+    passed: boolean;
+    issues: { severity: string; code: string; message: string; field?: string }[];
+  } | null>(null);
+  const [deployStatus, setDeployStatus] = useState<{
+    live_url?: string;
+    service_urls?: Record<string, string>;
+    routing_checklist?: string[];
+    pipeline_state?: string;
+    status?: string;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deployStage, setDeployStage] = useState(0);
+  const [deployLogs, setDeployLogs] = useState<string[]>([]);
   const [maxReachedIndex, setMaxReachedIndex] = useState(0);
 
   const advanceToStep = useCallback((id: WizardStepId) => {
@@ -93,7 +154,99 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [demoMode, repoUrl]);
+  }, [demoMode, repoUrl, advanceToStep]);
+
+  const loadArchitecture = useCallback(async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const graph = await api.architecture(sessionId);
+      setArchitecture({
+        nodes: graph.nodes as ArchNode[],
+        edges: graph.edges as ArchEdge[],
+      });
+      advanceToStep("architecture");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Architecture failed");
+    } finally {
+      setLoading(false);
+    }
+  }, [sessionId, advanceToStep]);
+
+  const loadObservability = useCallback(async () => {
+    if (!deploymentId) return;
+    try {
+      const snap = await api.getObservability(deploymentId);
+      setObservability(snap);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Observability failed");
+    }
+  }, [deploymentId]);
+
+  useEffect(() => {
+    if (!deploymentId || isPreviewStep) return;
+    if (step !== "operate" && step !== "incidents") return;
+
+    void loadObservability();
+    const timer = setInterval(() => void loadObservability(), OBSERVABILITY_POLL_MS);
+    return () => clearInterval(timer);
+  }, [step, deploymentId, isPreviewStep, loadObservability]);
+
+  const applyFix = useCallback(async () => {
+    const open = incidents.find((i) => i.status !== "resolved" && i.id);
+    if (!open?.id || !deploymentId) return;
+    setRemediating(true);
+    setError(null);
+    try {
+      const updated = (await api.remediateIncident(String(open.id))) as IncidentData;
+      setIncidents((prev) =>
+        prev.map((inc) => (inc.id === updated.id ? { ...inc, ...updated } : inc)),
+      );
+      if (updated.status === "resolved") {
+        setHealed(true);
+        await loadObservability();
+      } else if (updated.remediation_error) {
+        setError(updated.remediation_error);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Remediation failed");
+    } finally {
+      setRemediating(false);
+    }
+  }, [incidents, deploymentId, loadObservability]);
+
+  const healthMap = useMemo(() => {
+    const health = observability?.health as
+      | { service: string; status: string; readiness_ok?: boolean }[]
+      | undefined;
+    if (health?.length) {
+      return Object.fromEntries(health.map((h) => [h.service, h.status]));
+    }
+    if (healed) {
+      return {
+        frontend: "healthy",
+        api: "healthy",
+        database: "healthy",
+        cache: "healthy",
+        search: "healthy",
+      };
+    }
+    const hasOpen = incidents.some((i) => i.status !== "resolved");
+    if (hasOpen) {
+      return {
+        frontend: "healthy",
+        api: "critical",
+        database: "degraded",
+        cache: "healthy",
+        search: "degraded",
+      };
+    }
+    return {};
+  }, [observability, incidents, healed]);
+
+  const observabilityCheckedAt =
+    typeof observability?.checked_at === "string" ? observability.checked_at : null;
 
   const loadPlan = useCallback(async () => {
     if (!sessionId) return;
@@ -106,62 +259,115 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, advanceToStep]);
 
   const loadYaml = useCallback(async () => {
     if (!sessionId) return;
     setLoading(true);
+    setError(null);
     try {
       const data = await api.generateYaml(sessionId);
       setYaml({ zerops: data.zerops_yaml, import: data.import_yaml });
+      const report = await api.validateConfig(sessionId);
+      setValidation(report);
       advanceToStep("configure");
     } catch (e) {
       setError(e instanceof Error ? e.message : "YAML generation failed");
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, advanceToStep]);
 
   const runDeploy = useCallback(async () => {
     if (!sessionId) return;
     setLoading(true);
+    setError(null);
+    setHealed(false);
+    setDeployStatus(null);
+    setDeployLogs([]);
+    advanceToStep("deploy");
     setDeployStage(0);
     try {
-      for (let i = 0; i < DEPLOY_STAGES.length - 1; i++) {
-        setDeployStage(i);
-        await new Promise((r) => setTimeout(r, 600));
-      }
       const res = await api.deploy(sessionId, demoMode);
       setDeploymentId(res.deployment_id);
-      setDeployStage(DEPLOY_STAGES.length - 1);
-      advanceToStep("deploy");
-      if (demoMode) {
-        setIncidents((await api.listIncidents(res.deployment_id)) as Record<string, unknown>[]);
+
+      await new Promise<void>((resolve) => {
+        const es = new EventSource(deploymentStreamUrl(res.deployment_id));
+        const finish = () => {
+          es.close();
+          resolve();
+        };
+        es.addEventListener("log", (ev) => {
+          try {
+            const data = JSON.parse(ev.data) as { line?: string };
+            if (data.line) {
+              setDeployLogs((prev) => [...prev.slice(-100), data.line as string]);
+              setDeployStage((s) => Math.min(s + 1, DEPLOY_STAGES.length - 2));
+            }
+          } catch {
+            /* ignore malformed SSE */
+          }
+        });
+        es.addEventListener("status", (ev) => {
+          try {
+            const data = JSON.parse(ev.data) as {
+              status?: string;
+              pipeline_state?: string;
+              stage?: string;
+            };
+            setDeployStatus((prev) => ({ ...prev, ...data }));
+          } catch {
+            /* ignore */
+          }
+        });
+        es.addEventListener("done", () => {
+          setDeployStage(DEPLOY_STAGES.length - 1);
+          finish();
+        });
+        es.addEventListener("end", finish);
+        es.onerror = finish;
+      });
+
+      if (!demoMode) {
+        for (let attempt = 0; attempt < 20; attempt++) {
+          const st = await api.getDeploymentStatus(res.deployment_id);
+          setDeployStatus(st);
+          if (st.status === "succeeded" || st.status === "failed") break;
+          await new Promise((r) => setTimeout(r, 2000));
+        }
       }
+      setIncidents((await api.listIncidents(res.deployment_id)) as IncidentData[]);
+      await loadObservability();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Deploy failed");
     } finally {
       setLoading(false);
     }
-  }, [sessionId, demoMode]);
+  }, [sessionId, demoMode, advanceToStep, loadObservability]);
 
   const loadScore = useCallback(async () => {
     if (!deploymentId) return;
     setLoading(true);
     try {
       setScore(await api.getScore(deploymentId));
+      await loadObservability();
       advanceToStep("score");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Score failed");
     } finally {
       setLoading(false);
     }
-  }, [deploymentId]);
+  }, [deploymentId, advanceToStep, loadObservability]);
 
+  const activeArchitecture =
+    architecture ?? (isPreviewStep && step === "architecture" ? DEMO_ARCHITECTURE : null);
   const activeStack = stack ?? (isPreviewStep && step === "analyze" ? DEMO_STACK : null);
   const activePlan = plan ?? (isPreviewStep && step === "plan" ? DEMO_PLAN : null);
   const activeYaml = yaml ?? (isPreviewStep && step === "configure" ? DEMO_YAML : null);
   const activeScore = score ?? (isPreviewStep && step === "score" ? DEMO_SCORE : null);
+  const timelineEvents = (Array.isArray(observability?.timeline)
+    ? observability.timeline
+    : []) as OpsTimelineEvent[];
 
   const stackFields = activeStack
     ? [
@@ -171,6 +377,12 @@ export default function HomePage() {
         { label: "Cache", value: String(activeStack.cache ?? "None"), icon: "⚡" },
       ]
     : [];
+
+  const analysisSummary =
+    activeStack &&
+    typeof (activeStack as Record<string, unknown>).analysis_summary === "string"
+      ? ((activeStack as Record<string, unknown>).analysis_summary as string)
+      : null;
 
   return (
     <AppShell
@@ -195,23 +407,17 @@ export default function HomePage() {
           </div>
         </header>
 
-        <div className="relative flex-1 overflow-y-auto p-8">
-          <AnimatePresence mode="wait">
-            {error && (
-              <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"
-              >
-                {error}
-              </motion.div>
-            )}
-          </AnimatePresence>
+        <div className="relative min-h-0 flex-1 overflow-y-auto p-8">
+          {error && (
+            <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              {error}
+            </div>
+          )}
 
-          <AnimatePresence mode="wait">
+          <AnimatePresence mode="wait" initial={false}>
             {step === "connect" && (
               <StepPanel
+                key="connect"
                 title="Connect your repository"
                 subtitle="Paste a GitHub URL or use Demo Mode to explore the full platform engineering flow."
                 badge="Platform Engineering"
@@ -240,6 +446,7 @@ export default function HomePage() {
 
             {step === "analyze" && activeStack && (
               <StepPanel
+                key="analyze"
                 title="Stack detected"
                 subtitle="AI identified your application stack and infrastructure requirements."
                 badge="Repository Intelligence"
@@ -250,52 +457,36 @@ export default function HomePage() {
                     <StatCard key={f.label} {...f} delay={i * 0.08} />
                   ))}
                 </div>
+                {analysisSummary && (
+                  <Card className="mt-4">
+                    <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                      AI analysis
+                    </p>
+                    <p className="mt-2 text-sm text-zinc-300">{analysisSummary}</p>
+                  </Card>
+                )}
                 <div className="mt-6 flex gap-3">
-                  <Button
-                    onClick={() => advanceToStep("architecture")}
-                    disabled={isPreviewStep}
-                  >
+                  <Button onClick={loadArchitecture} loading={loading} disabled={isPreviewStep}>
                     View Architecture
                   </Button>
                 </div>
               </StepPanel>
             )}
 
-            {step === "architecture" && (
+            {step === "architecture" && activeArchitecture && (
               <StepPanel
+                key="architecture"
                 title="Infrastructure architecture"
                 subtitle="Proposed multi-service topology for Zerops private networking."
                 badge="Architecture Builder"
               >
                 {isPreviewStep && <PreviewBanner />}
-                <Card>
-                  <div className="flex flex-wrap items-center justify-center gap-4 py-8">
-                    {["Frontend", "API", "PostgreSQL", "Redis"].map((node, i) => (
-                      <motion.div
-                        key={node}
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: i * 0.1 }}
-                        className="flex items-center gap-4"
-                      >
-                        <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-6 py-4 text-center shadow-glow-sm">
-                          <p className="text-sm font-semibold text-white">{node}</p>
-                          <p className="mt-1 text-[10px] text-zinc-500">
-                            {i === 0 ? "Next.js" : i === 1 ? "Node / Python" : i === 2 ? "Postgres" : "Cache"}
-                          </p>
-                        </div>
-                        {i < 3 && (
-                          <motion.span
-                            animate={{ opacity: [0.3, 1, 0.3] }}
-                            transition={{ repeat: Infinity, duration: 2, delay: i * 0.2 }}
-                            className="text-indigo-400"
-                          >
-                            →
-                          </motion.span>
-                        )}
-                      </motion.div>
-                    ))}
-                  </div>
+                <Card className="overflow-hidden p-2">
+                  <ArchitectureGraphView
+                    nodes={activeArchitecture.nodes}
+                    edges={activeArchitecture.edges}
+                    healthOverrides={healthMap}
+                  />
                 </Card>
                 <div className="mt-6">
                   <Button onClick={loadPlan} loading={loading} disabled={isPreviewStep}>
@@ -307,6 +498,7 @@ export default function HomePage() {
 
             {step === "plan" && activePlan && (
               <StepPanel
+                key="plan"
                 title="Deployment plan"
                 subtitle="Estimated resources, cost, and build time before you deploy."
                 badge="Deployment Planner"
@@ -339,6 +531,7 @@ export default function HomePage() {
 
             {step === "configure" && activeYaml && (
               <StepPanel
+                key="configure"
                 title="Zerops configuration"
                 subtitle="Import YAML + zerops.yaml generated from your repository analysis."
                 badge="Zerops Native"
@@ -348,6 +541,34 @@ export default function HomePage() {
                   <YamlPreview title="import.yaml" content={activeYaml.import} />
                   <YamlPreview title="zerops.yaml" content={activeYaml.zerops} />
                 </div>
+                {validation && !isPreviewStep && (
+                  <Card className="mt-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                        Pre-deploy validation
+                      </p>
+                      <Badge tone={validation.passed ? "success" : "warning"}>
+                        {validation.passed ? "Passed" : "Warnings"}
+                      </Badge>
+                    </div>
+                    <ul className="mt-3 space-y-2">
+                      {validation.issues.map((issue, i) => (
+                        <li key={i} className="flex gap-2 text-sm text-zinc-300">
+                          <Badge tone={issue.severity === "error" ? "critical" : "warning"}>
+                            {issue.code}
+                          </Badge>
+                          <span>{issue.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {!validation.passed && (
+                      <p className="mt-3 text-xs text-amber-400/90">
+                        Fix blockers before production deploy. Demo Mode will simulate the failure
+                        scenario for the AIOps loop.
+                      </p>
+                    )}
+                  </Card>
+                )}
                 <div className="mt-6">
                   <Button onClick={runDeploy} loading={loading} disabled={isPreviewStep}>
                     Deploy to Zerops
@@ -358,6 +579,7 @@ export default function HomePage() {
 
             {step === "deploy" && (
               <StepPanel
+                key="deploy"
                 title="Deploying to Zerops"
                 subtitle="Real-time pipeline status from build to readiness check."
                 badge="Deployment Engine"
@@ -404,6 +626,61 @@ export default function HomePage() {
                     ))}
                   </ul>
                 </Card>
+                {deployLogs.length > 0 && (
+                  <Card className="mt-4">
+                    <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                      Live build log (SSE)
+                    </p>
+                    <pre className="mt-3 max-h-48 overflow-auto rounded-lg bg-black/40 p-3 font-mono text-xs text-zinc-400">
+                      {deployLogs.join("\n")}
+                    </pre>
+                  </Card>
+                )}
+                {deployStatus && !demoMode && (
+                  <Card className="mt-4">
+                    <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                      Zerops deployment
+                    </p>
+                    <p className="mt-2 text-sm text-zinc-300">
+                      Pipeline: {deployStatus.pipeline_state ?? "—"} · Status:{" "}
+                      {deployStatus.status ?? "—"}
+                    </p>
+                    {deployStatus.live_url && (
+                      <p className="mt-2 text-sm">
+                        <span className="text-zinc-500">Live URL: </span>
+                        <a
+                          href={deployStatus.live_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-indigo-400 hover:underline"
+                        >
+                          {deployStatus.live_url}
+                        </a>
+                      </p>
+                    )}
+                    {deployStatus.service_urls &&
+                      Object.entries(deployStatus.service_urls).map(([role, url]) => (
+                        <p key={role} className="mt-1 text-sm">
+                          <span className="text-zinc-500 capitalize">{role}: </span>
+                          <a href={url} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">
+                            {url}
+                          </a>
+                        </p>
+                      ))}
+                    {(deployStatus.routing_checklist?.length ?? 0) > 0 && (
+                      <div className="mt-4">
+                        <p className="text-xs font-medium uppercase tracking-wider text-amber-500/90">
+                          Post-deploy checklist
+                        </p>
+                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-zinc-400">
+                          {deployStatus.routing_checklist!.map((item, i) => (
+                            <li key={i}>{item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </Card>
+                )}
                 {!loading && (
                   <div className="mt-6">
                     <Button onClick={() => advanceToStep("operate")} disabled={isPreviewStep}>
@@ -416,26 +693,93 @@ export default function HomePage() {
 
             {step === "operate" && (
               <StepPanel
+                key="operate"
                 title="Observability"
-                subtitle="Unified metrics, logs, and health — AIOps is watching."
+                subtitle="Unified metrics, logs, and live health from Zerops — polled every 30s."
                 badge="Observability Layer"
               >
                 {isPreviewStep && <PreviewBanner />}
+                {observabilityCheckedAt && !isPreviewStep && (
+                  <p className="mb-3 text-xs text-zinc-500">
+                    Last health probe: {new Date(observabilityCheckedAt).toLocaleTimeString()}
+                  </p>
+                )}
+                {activeArchitecture && (
+                  <Card className="mb-4 overflow-hidden p-2">
+                    <ArchitectureGraphView
+                      nodes={activeArchitecture.nodes}
+                      edges={activeArchitecture.edges}
+                      healthOverrides={healthMap}
+                    />
+                  </Card>
+                )}
                 <div className="grid gap-4 sm:grid-cols-3">
-                  <StatCard label="CPU" value="12.5%" icon="📊" delay={0} />
-                  <StatCard label="Memory" value="256 MB" icon="💾" delay={0.08} />
-                  <StatCard label="Status" value="Healthy" icon="✅" delay={0.16} />
+                  <StatCard
+                    label="API CPU"
+                    value={`${(observability?.metrics as { service: string; cpu_percent: number }[] | undefined)?.find((m) => m.service === "api")?.cpu_percent?.toFixed(1) ?? (healed ? "14.0" : "45.0")}%`}
+                    icon="📊"
+                    delay={0}
+                  />
+                  <StatCard
+                    label="API Memory"
+                    value={`${Math.round((observability?.metrics as { service: string; memory_mb: number }[] | undefined)?.find((m) => m.service === "api")?.memory_mb ?? (healed ? 256 : 384))} MB`}
+                    icon="💾"
+                    delay={0.08}
+                  />
+                  <StatCard
+                    label="Status"
+                    value={
+                      (observability?.health as { status: string }[] | undefined)?.some(
+                        (h) => h.status === "critical",
+                      )
+                        ? "Critical"
+                        : (observability?.health as { status: string }[] | undefined)?.some(
+                              (h) => h.status === "degraded",
+                            )
+                          ? "Degraded"
+                          : healed || !(incidents.some((i) => i.status !== "resolved"))
+                            ? "Healthy"
+                            : "Degraded"
+                    }
+                    icon={healed ? "✅" : "⚠️"}
+                    delay={0.16}
+                  />
                 </div>
+                {typeof observability?.log_summary === "string" && observability.log_summary && (
+                  <Card className="mt-4">
+                    <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                      AI log summary
+                    </p>
+                    <p className="mt-2 text-sm text-zinc-300">{observability.log_summary}</p>
+                  </Card>
+                )}
+                {timelineEvents.length > 0 && (
+                  <Card className="mt-4">
+                    <OpsTimeline events={timelineEvents} title="Ops timeline — deploy → incident → heal → score" />
+                  </Card>
+                )}
                 <div className="mt-6 flex items-center gap-3">
-                  <span className="relative flex h-2 w-2">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-                  </span>
-                  <span className="text-sm text-zinc-400">No incidents — monitoring active</span>
+                  {!healed && incidents.some((i) => i.status !== "resolved") ? (
+                    <>
+                      <span className="relative flex h-2 w-2">
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                        <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+                      </span>
+                      <span className="text-sm text-red-300">Active incident detected</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="relative flex h-2 w-2">
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                        <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                      </span>
+                      <span className="text-sm text-zinc-400">Monitoring active</span>
+                    </>
+                  )}
                 </div>
                 <div className="mt-6">
                   <Button onClick={() => advanceToStep("incidents")} disabled={isPreviewStep}>
-                    View Incidents
+                    {incidents.some((i) => i.status !== "resolved") ? "View Incident" : "View Incidents"}
                   </Button>
                 </div>
               </StepPanel>
@@ -443,11 +787,21 @@ export default function HomePage() {
 
             {step === "incidents" && (
               <StepPanel
+                key="incidents"
                 title="AIOps incidents"
                 subtitle="Detect, diagnose, and remediate production failures."
                 badge="AIOps Engine"
               >
                 {isPreviewStep && <PreviewBanner />}
+                {activeArchitecture && (
+                  <Card className="mb-4 overflow-hidden p-2">
+                    <ArchitectureGraphView
+                      nodes={activeArchitecture.nodes}
+                      edges={activeArchitecture.edges}
+                      healthOverrides={healthMap}
+                    />
+                  </Card>
+                )}
                 {incidents.length === 0 && !isPreviewStep ? (
                   <Card className="text-center">
                     <p className="text-emerald-400">✓ No active incidents</p>
@@ -457,46 +811,68 @@ export default function HomePage() {
                   </Card>
                 ) : (
                   (isPreviewStep ? [DEMO_INCIDENT] : incidents).map((inc, i) => (
-                    <Card key={i} delay={i * 0.1} className="mb-4 border-red-500/20">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <Badge tone="critical">Critical</Badge>
-                          <h3 className="mt-2 font-semibold text-white">
-                            {String(inc.title ?? "Incident")}
-                          </h3>
-                          {typeof inc.diagnosis === "object" && inc.diagnosis !== null ? (
-                            <p className="mt-2 text-sm text-zinc-400">
-                              {String((inc.diagnosis as Record<string, unknown>).root_cause ?? "")}
-                            </p>
-                          ) : null}
-                        </div>
-                      </div>
-                    </Card>
+                    <IncidentPanel
+                      key={inc.id ?? i}
+                      incident={inc}
+                      resolved={healed || inc.status === "resolved"}
+                      onApplyFix={!isPreviewStep && !healed ? applyFix : undefined}
+                      applying={remediating}
+                    />
                   ))
                 )}
-                <div className="mt-6">
+                {timelineEvents.length > 0 && !isPreviewStep && (
+                  <Card className="mt-4">
+                    <OpsTimeline events={timelineEvents} />
+                  </Card>
+                )}
+                <div className="mt-6 flex gap-3">
                   <Button onClick={loadScore} loading={loading} disabled={isPreviewStep}>
                     Deployment Score
                   </Button>
+                  {healed && (
+                    <Button variant="secondary" onClick={() => advanceToStep("operate")}>
+                      Back to Observability
+                    </Button>
+                  )}
                 </div>
               </StepPanel>
             )}
 
             {step === "score" && activeScore && (
               <StepPanel
+                key="score"
                 title="Deployment score"
-                subtitle="Production readiness across security, performance, and reliability."
+                subtitle="Computed from validation, live health, incidents, and observability — not static defaults."
                 badge="Optimization Advisor"
               >
                 {isPreviewStep && <PreviewBanner />}
+                {"overall" in activeScore && typeof activeScore.overall === "number" && (
+                  <p className="mb-4 text-sm text-zinc-400">
+                    Overall readiness:{" "}
+                    <span className="font-semibold text-indigo-300">{activeScore.overall}/10</span>
+                  </p>
+                )}
                 <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
-                  {Object.entries(activeScore).map(
-                    ([k, v], i) =>
-                      typeof v === "number" && (
-                        <ScoreRing key={k} label={k} value={v} delay={i * 0.08} />
-                      ),
+                  {(
+                    ["security", "performance", "scalability", "reliability", "observability"] as const
+                  ).map((k, i) =>
+                    typeof activeScore[k] === "number" ? (
+                      <ScoreRing key={k} label={k} value={activeScore[k]} delay={i * 0.08} />
+                    ) : null,
                   )}
                 </div>
+                {Array.isArray(activeScore.recommendations) && activeScore.recommendations.length > 0 && (
+                  <Card className="mt-6">
+                    <p className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                      Recommendations
+                    </p>
+                    <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-300">
+                      {activeScore.recommendations.map((rec, i) => (
+                        <li key={i}>{rec}</li>
+                      ))}
+                    </ul>
+                  </Card>
+                )}
               </StepPanel>
             )}
           </AnimatePresence>

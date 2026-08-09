@@ -16,6 +16,7 @@ from app.models.analysis import (
 )
 from app.models.deployment import DeploymentPlan, ZeropsConfig
 from app.services.store import session_store
+from app.services.zerops import repo_slug_from_url
 
 router = APIRouter()
 
@@ -42,6 +43,10 @@ async def analyze_repo(body: AnalyzeRequest):
         files = await github.fetch_repo_tree(str(body.repo_url))
 
     stack = await orchestrator.run("repository_analyzer", AgentContext(payload={"files": files}))
+    if session.repo_url:
+        stack.repo_slug = repo_slug_from_url(session.repo_url)
+    elif body.demo_mode:
+        stack.repo_slug = "demo"
     session.stack = stack
     session.status = SessionStatus.READY
     session_store.save(session)
@@ -79,11 +84,18 @@ async def generate_yaml(body: SessionIdBody):
     return config
 
 
+class ValidateRequest(BaseModel):
+    session_id: UUID
+
+
 @router.post("/validate", response_model=ValidationReport)
-async def validate_config(body: SessionIdBody, config: ZeropsConfig):
+async def validate_config(body: ValidateRequest):
     session = session_store.get(body.session_id)
     if not session or not session.stack:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    yaml_svc = get_service("yaml_generator")
+    config = yaml_svc.generate(session.stack, session.repo_url)
 
     orchestrator = get_orchestrator()
     return await orchestrator.run(
@@ -120,6 +132,7 @@ async def get_plan(session_id: UUID):
 
 def _demo_files() -> dict[str, str]:
     return {
-        "package.json": '{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0"},"engines":{"node":">=22"}}',
+        "package.json": '{"dependencies":{"next":"15.0.0","@prisma/client":"5.0.0","typesense":"2.0.0","ioredis":"5.0.0"},"engines":{"node":">=22"}}',
+        "requirements.txt": "fastapi\nuvicorn\n",
         "prisma/schema.prisma": 'datasource db { provider = "postgresql" url = env("DATABASE_URL") }',
     }

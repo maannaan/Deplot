@@ -20,12 +20,19 @@ class StackDetection(BaseModel):
     package_manager: str | None = None
     database: str | None = None
     cache: str | None = None
+    search: str | None = None
     has_frontend: bool = False
     has_backend: bool = False
     has_workers: bool = False
+    backend_framework: str | None = None
+    backend_runtime: str | None = None
+    monorepo_frontend_path: str | None = None
+    monorepo_backend_path: str | None = None
+    repo_slug: str | None = None
     detected_env_vars: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     raw_signals: dict[str, Any] = Field(default_factory=dict)
+    analysis_summary: str | None = None
 
 
 class ArchitectureNode(BaseModel):
@@ -33,6 +40,7 @@ class ArchitectureNode(BaseModel):
     label: str
     type: str  # frontend | api | database | cache | worker | storage
     technology: str | None = None
+    hostname: str | None = None
     health: str = "unknown"  # healthy | degraded | critical | unknown
 
 

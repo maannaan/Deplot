@@ -36,6 +36,12 @@ class Remediation(BaseModel):
     import_yaml_diff: str | None = None
 
 
+class RemediationStep(BaseModel):
+    name: str
+    status: str  # pending | running | succeeded | failed
+    message: str | None = None
+
+
 class Incident(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     deployment_id: UUID
@@ -47,6 +53,8 @@ class Incident(BaseModel):
     diagnosis: Diagnosis | None = None
     runbook: list[str] = Field(default_factory=list)
     suggested_remediation: Remediation | None = None
+    remediation_steps: list[RemediationStep] = Field(default_factory=list)
+    remediation_error: str | None = None
     detected_at: datetime = Field(default_factory=datetime.utcnow)
     resolved_at: datetime | None = None
 
