@@ -3,10 +3,11 @@ zerops:
     build:
       base: nodejs@22
       buildCommands:
+        - cd frontend
         - npm ci
         - npm run build
-      deployFiles: ./
-      cache: node_modules
+      deployFiles: frontend/
+      cache: frontend/node_modules
     run:
       base: nodejs@22
       ports:

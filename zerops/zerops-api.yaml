@@ -3,8 +3,9 @@ zerops:
     build:
       base: python@latest
       buildCommands:
+        - cd backend
         - pip install -e .
-      deployFiles: ./
+      deployFiles: backend/
     run:
       base: python@latest
       ports:
