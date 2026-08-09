@@ -1,8 +1,5 @@
 # Deplot monorepo — Zerops reads this from repository root.
 # Each service uses the setup block matching its hostname (web / api).
-#
-# deployFiles `frontend/~` strips the folder prefix so package.json lands at
-# /var/www/ (required for npm start). Without ~, runtime gets /var/www/frontend/ → 502.
 
 zerops:
   - setup: web
@@ -30,11 +27,17 @@ zerops:
     build:
       base: python@latest
       buildCommands:
-        - cd backend && pip install -e .
+        - cd backend && pip install . --target dependencies
       deployFiles:
         - backend/~
+        - prompts/
+        - templates/
+      cache:
+        - backend/dependencies
     run:
       base: python@latest
+      envVariables:
+        PYTHONPATH: dependencies
       ports:
         - port: 8000
           httpSupport: true
@@ -42,4 +45,4 @@ zerops:
         http:
           path: /api/v1/health
           statusCode: 200
-      start: uvicorn app.main:app --host 0.0.0.0 --port 8000
+      start: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000

@@ -3,11 +3,17 @@ zerops:
     build:
       base: python@latest
       buildCommands:
-        - cd backend && pip install -e .
+        - cd backend && pip install . --target dependencies
       deployFiles:
         - backend/~
+        - prompts/
+        - templates/
+      cache:
+        - backend/dependencies
     run:
       base: python@latest
+      envVariables:
+        PYTHONPATH: dependencies
       ports:
         - port: 8000
           httpSupport: true
@@ -15,4 +21,4 @@ zerops:
         http:
           path: /api/v1/health
           statusCode: 200
-      start: uvicorn app.main:app --host 0.0.0.0 --port 8000
+      start: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000

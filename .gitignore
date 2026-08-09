@@ -1,5 +1,5 @@
 .env
-__pycache__/
+backend/dependencies/
 *.py[cod]
 .venv/
 venv/

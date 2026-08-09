@@ -3,8 +3,14 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Repo root (parent of backend/)
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# Repo root: monorepo parent locally, /var/www when prompts/ is co-deployed on Zerops
+_backend_root = Path(__file__).resolve().parents[1]
+if (_backend_root / "prompts").exists():
+    REPO_ROOT = _backend_root
+elif (_backend_root.parent / "prompts").exists():
+    REPO_ROOT = _backend_root.parent
+else:
+    REPO_ROOT = _backend_root.parent
 
 
 class Settings(BaseSettings):
