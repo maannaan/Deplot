@@ -4,11 +4,18 @@ zerops:
       base: nodejs@22
       buildCommands:
         - cd frontend && npm ci && npm run build
-      deployFiles: frontend/
-      cache: frontend/node_modules
+      deployFiles:
+        - frontend/~
+      cache:
+        - frontend/node_modules
+        - frontend/.next/cache
     run:
       base: nodejs@22
       ports:
         - port: 3000
           httpSupport: true
+      readiness:
+        http:
+          path: /
+          statusCode: 200
       start: npm start

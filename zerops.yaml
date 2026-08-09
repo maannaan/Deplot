@@ -1,5 +1,8 @@
 # Deplot monorepo — Zerops reads this from repository root.
 # Each service uses the setup block matching its hostname (web / api).
+#
+# deployFiles `frontend/~` strips the folder prefix so package.json lands at
+# /var/www/ (required for npm start). Without ~, runtime gets /var/www/frontend/ → 502.
 
 zerops:
   - setup: web
@@ -7,13 +10,20 @@ zerops:
       base: nodejs@22
       buildCommands:
         - cd frontend && npm ci && npm run build
-      deployFiles: frontend/
-      cache: frontend/node_modules
+      deployFiles:
+        - frontend/~
+      cache:
+        - frontend/node_modules
+        - frontend/.next/cache
     run:
       base: nodejs@22
       ports:
         - port: 3000
           httpSupport: true
+      readiness:
+        http:
+          path: /
+          statusCode: 200
       start: npm start
 
   - setup: api
@@ -21,7 +31,8 @@ zerops:
       base: python@latest
       buildCommands:
         - cd backend && pip install -e .
-      deployFiles: backend/
+      deployFiles:
+        - backend/~
     run:
       base: python@latest
       ports:
