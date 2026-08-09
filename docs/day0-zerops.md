@@ -21,6 +21,7 @@ zcli project service-import zerops/import-deplot-services.yaml -P YOUR_PROJECT_I
 Replace TBD with public repos before hackathon start.
 
 ## Deplot on Zerops
-Deploy using files in `zerops/`:
-- `import-deplot.yaml` — provisions web, api, postgres, valkey
-- `zerops-api.yaml` / `zerops-web.yaml` — per-service build configs
+Deploy using files in `zerops/` and **`zerops.yaml` at repo root** (required for GitHub CI/CD):
+- `zerops.yaml` — build config for **web** + **api** (must be at repository root)
+- `import-deplot-services.yaml` — provisions postgres, api, web
+- `zerops-api.yaml` / `zerops-web.yaml` — reference copies (optional)
