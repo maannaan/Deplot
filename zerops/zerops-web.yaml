@@ -3,7 +3,7 @@ zerops:
     build:
       base: nodejs@22
       envVariables:
-        NEXT_PUBLIC_API_URL: https://api-2a39-8000.prg1.zerops.app/api/v1
+        NEXT_PUBLIC_API_URL: "https://api-2a39-8000.prg1.zerops.app/api/v1"
       buildCommands:
         - cd frontend && npm ci && npm run build
       deployFiles:
@@ -15,7 +15,6 @@ zerops:
         httpGet:
           port: 3000
           path: /
-        failureTimeout: 120
     run:
       base: nodejs@22
       envVariables:
@@ -23,8 +22,4 @@ zerops:
       ports:
         - port: 3000
           httpSupport: true
-      healthCheck:
-        httpGet:
-          port: 3000
-          path: /
       start: npm start
