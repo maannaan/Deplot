@@ -4,6 +4,8 @@ zerops:
   - setup: web
     build:
       base: nodejs@22
+      envVariables:
+        NEXT_PUBLIC_API_URL: https://api-2a39-8000.prg1.zerops.app/api/v1
       buildCommands:
         - cd frontend && npm ci && npm run build
         - cd frontend && cp -r .next/static .next/standalone/.next/static
@@ -22,7 +24,6 @@ zerops:
       envVariables:
         NODE_ENV: production
         PORT: 3000
-        HOSTNAME: 0.0.0.0
       ports:
         - port: 3000
           httpSupport: true
@@ -48,6 +49,7 @@ zerops:
       base: python@latest
       envVariables:
         PYTHONPATH: dependencies
+        CORS_ORIGINS: https://web-2a39-3000.prg1.zerops.app
       ports:
         - port: 8000
           httpSupport: true
