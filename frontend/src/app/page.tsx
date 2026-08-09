@@ -15,7 +15,7 @@ import { IncidentPanel, type IncidentData } from "@/components/wizard/incident-p
 import { OpsTimeline, type OpsTimelineEvent } from "@/components/wizard/ops-timeline";
 import { PreviewBanner, ScoreRing, StatCard, StepPanel } from "@/components/wizard/step-panel";
 import { WIZARD_STEPS, getStepIndex, type WizardStepId } from "@/config/wizard-steps";
-import { api, deploymentStreamUrl } from "@/lib/api";
+import { api, deploymentStreamUrl, normalizeRepoUrl } from "@/lib/api";
 
 type Stack = Record<string, unknown> | null;
 
@@ -145,7 +145,9 @@ export default function HomePage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.analyze(demoMode ? null : repoUrl || null, demoMode);
+      const cleaned = demoMode ? null : (repoUrl ? normalizeRepoUrl(repoUrl) : null);
+      if (cleaned) setRepoUrl(cleaned);
+      const res = await api.analyze(cleaned, demoMode);
       setSessionId(res.session_id);
       setStack(res.stack);
       advanceToStep("analyze");

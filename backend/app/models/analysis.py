@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 class SessionStatus(StrEnum):
@@ -70,6 +70,14 @@ class ValidationReport(BaseModel):
 class AnalyzeRequest(BaseModel):
     repo_url: HttpUrl | None = None
     demo_mode: bool = False
+
+    @field_validator("repo_url", mode="before")
+    @classmethod
+    def clean_repo_url(cls, value: object) -> object:
+        if value is None:
+            return value
+        text = str(value).strip().rstrip(".,;")
+        return text or None
 
 
 class AnalyzeResponse(BaseModel):

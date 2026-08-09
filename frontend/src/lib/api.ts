@@ -4,19 +4,42 @@ export function deploymentStreamUrl(deploymentId: string): string {
   return `${API_BASE}/deployment/${deploymentId}/stream`;
 }
 
+function detailMessage(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const detail = (err as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const msg = (detail as { message?: unknown }).message;
+    if (typeof msg === "string") return msg;
+  }
+  return undefined;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    });
+  } catch {
+    throw new Error(
+      "Failed to reach API — check the URL has no trailing comma, or try again.",
+    );
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err?.detail?.message ?? `API error ${res.status}`);
+    throw new Error(detailMessage(err) ?? `API error ${res.status}`);
   }
   return res.json();
+}
+
+/** Normalize pasted GitHub URLs (trim, strip trailing punctuation). */
+export function normalizeRepoUrl(url: string): string {
+  return url.trim().replace(/[.,;]+$/g, "").replace(/\/+$/, "");
 }
 
 export const api = {

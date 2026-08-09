@@ -62,6 +62,14 @@ class GitHubService(BaseService):
 
     @staticmethod
     def _parse_github_url(repo_url: str) -> tuple[str, str]:
-        path = repo_url.rstrip("/").replace(".git", "")
-        parts = Path(path).parts
+        path = repo_url.strip().rstrip(".,;/").replace(".git", "")
+        # Prefer URL path segments over pathlib (which mishandles scheme:// hosts).
+        if "github.com/" in path:
+            tail = path.split("github.com/", 1)[1]
+            parts = [p for p in tail.split("/") if p]
+            if len(parts) >= 2:
+                return parts[0], parts[1]
+        parts = [p for p in Path(path).parts if p not in (".", "/")]
+        if len(parts) < 2:
+            raise ValueError(f"Invalid GitHub URL: {repo_url}")
         return parts[-2], parts[-1]
