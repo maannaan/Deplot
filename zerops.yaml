@@ -1,4 +1,5 @@
 # Deplot monorepo — Zerops reads this from repository root.
+# deployFiles `frontend/~` / `backend/~` flatten monorepo paths to /var/www.
 
 zerops:
   - setup: web
@@ -8,10 +9,8 @@ zerops:
         NEXT_PUBLIC_API_URL: https://api-2a39-8000.prg1.zerops.app/api/v1
       buildCommands:
         - cd frontend && npm ci && npm run build
-        - cd frontend && cp -r .next/static .next/standalone/.next/static
-        - cd frontend && mkdir -p .next/standalone/public && (test -d public && cp -r public/. .next/standalone/public/ || true)
       deployFiles:
-        - frontend/.next/standalone/~
+        - frontend/~
       cache:
         - frontend/node_modules
     deploy:
@@ -19,15 +18,19 @@ zerops:
         httpGet:
           port: 3000
           path: /
+        failureTimeout: 120
     run:
       base: nodejs@22
       envVariables:
         NODE_ENV: production
-        PORT: 3000
       ports:
         - port: 3000
           httpSupport: true
-      start: node server.js
+      healthCheck:
+        httpGet:
+          port: 3000
+          path: /
+      start: npm start
 
   - setup: api
     build:
@@ -45,6 +48,7 @@ zerops:
         httpGet:
           port: 8000
           path: /api/v1/health
+        failureTimeout: 120
     run:
       base: python@latest
       envVariables:
@@ -53,4 +57,8 @@ zerops:
       ports:
         - port: 8000
           httpSupport: true
+      healthCheck:
+        httpGet:
+          port: 8000
+          path: /api/v1/health
       start: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000

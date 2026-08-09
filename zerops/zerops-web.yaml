@@ -2,12 +2,12 @@ zerops:
   - setup: web
     build:
       base: nodejs@22
+      envVariables:
+        NEXT_PUBLIC_API_URL: https://api-2a39-8000.prg1.zerops.app/api/v1
       buildCommands:
         - cd frontend && npm ci && npm run build
-        - cd frontend && cp -r .next/static .next/standalone/.next/static
-        - cd frontend && mkdir -p .next/standalone/public && (test -d public && cp -r public/. .next/standalone/public/ || true)
       deployFiles:
-        - frontend/.next/standalone/~
+        - frontend/~
       cache:
         - frontend/node_modules
     deploy:
@@ -15,13 +15,16 @@ zerops:
         httpGet:
           port: 3000
           path: /
+        failureTimeout: 120
     run:
       base: nodejs@22
       envVariables:
         NODE_ENV: production
-        PORT: 3000
-        HOSTNAME: 0.0.0.0
       ports:
         - port: 3000
           httpSupport: true
-      start: node server.js
+      healthCheck:
+        httpGet:
+          port: 3000
+          path: /
+      start: npm start
