@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Repo root: monorepo parent locally, /var/www when prompts/ is co-deployed on Zerops
@@ -18,6 +19,7 @@ class Settings(BaseSettings):
         env_file=(".env", str(REPO_ROOT / ".env")),
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     app_name: str = "Deplot AI"
@@ -34,9 +36,24 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.0-flash"
     github_token: str = ""
 
-    zerops_api_token: str = ""
-    zerops_project_id: str = ""
-    zerops_deploy_project_id: str = ""
+    # Zerops GUI forbids custom env keys starting with ZEROPS_ — use DEPLOT_* /
+    # PLATFORM_* / DEPLOY_* there. Local .env may still use ZEROPS_*.
+    zerops_api_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("DEPLOT_API_TOKEN", "ZEROPS_API_TOKEN", "zerops_api_token"),
+    )
+    zerops_project_id: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "PLATFORM_PROJECT_ID", "ZEROPS_PROJECT_ID", "zerops_project_id"
+        ),
+    )
+    zerops_deploy_project_id: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "DEPLOY_PROJECT_ID", "ZEROPS_DEPLOY_PROJECT_ID", "zerops_deploy_project_id"
+        ),
+    )
     zerops_api_base: str = "https://api.app-prg1.zerops.io/api/rest/public"
     zcli_path: str = ""
     search_heavy_stack: bool = True

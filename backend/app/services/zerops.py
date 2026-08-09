@@ -153,9 +153,17 @@ class ZeropsService(BaseService):
                 "repo_slug": repo_slug or "demo",
             }
         if not pid:
-            return {"ok": False, "error": "ZEROPS_DEPLOY_PROJECT_ID not configured", "simulated": True}
+            return {
+                "ok": False,
+                "error": "DEPLOY_PROJECT_ID not configured (set on api service; Zerops forbids ZEROPS_ prefix)",
+                "simulated": True,
+            }
         if not self._settings.zerops_api_token:
-            return {"ok": False, "error": "ZEROPS_API_TOKEN not configured", "simulated": True}
+            return {
+                "ok": False,
+                "error": "DEPLOT_API_TOKEN not configured (set on api service; Zerops forbids ZEROPS_ prefix)",
+                "simulated": True,
+            }
 
         result = await self.import_services(config.import_yaml, pid)
         result["simulated"] = False
@@ -323,7 +331,10 @@ class ZeropsService(BaseService):
         """Apply env secrets via zcli project service-import patch YAML."""
         pid = project_id or self._settings.zerops_target_project_id
         if not pid:
-            return {"ok": False, "error": "ZEROPS_DEPLOY_PROJECT_ID not configured"}
+            return {
+                "ok": False,
+                "error": "DEPLOY_PROJECT_ID not configured (set on api service; Zerops forbids ZEROPS_ prefix)",
+            }
         if not env_changes:
             return {"ok": False, "error": "No environment changes to apply"}
 
