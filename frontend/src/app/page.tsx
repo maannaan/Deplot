@@ -38,9 +38,12 @@ const DEMO_STACK = {
 };
 
 const DEMO_PLAN = {
-  estimated_cost_usd_month: 25.5,
-  estimated_build_minutes: 6,
+  estimated_cost_usd_month: 12.68,
+  estimated_build_minutes: 15,
   services: [{ name: "frontend" }, { name: "api" }, { name: "database" }, { name: "cache" }, { name: "search" }],
+  pricing_source: "zerops_official_rates",
+  pricing_note:
+    "Baseline NON_HA shared-CPU resources using Zerops published rates (CPU, RAM, disk). Actual spend varies with autoscaling and usage.",
 };
 
 const DEMO_YAML = {
@@ -523,6 +526,9 @@ export default function HomePage() {
                     icon="📦"
                   />
                 </div>
+                {"pricing_note" in activePlan && activePlan.pricing_note ? (
+                  <p className="mt-4 text-xs text-zinc-500">{String(activePlan.pricing_note)}</p>
+                ) : null}
                 <div className="mt-6">
                   <Button onClick={loadYaml} loading={loading} disabled={isPreviewStep}>
                     Generate Zerops Config

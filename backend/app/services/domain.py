@@ -10,7 +10,7 @@ from app.models.analysis import (
     ValidationIssue,
     ValidationReport,
 )
-from app.models.deployment import DeploymentPlan, DeploymentPlanService, ZeropsConfig
+from app.models.deployment import DeploymentPlan, ZeropsConfig
 from app.services.base import BaseService
 from app.services.gemini import GeminiClient
 from app.services.zerops import repo_slug_from_url, hostnames_for_slug
@@ -195,21 +195,13 @@ class AnalysisService(BaseService):
 class PlannerService(BaseService):
     name = "planner"
 
+    def __init__(self, project_core: str = "lightweight") -> None:
+        self._project_core = project_core
+
     def build_plan(self, stack: StackDetection, graph: ArchitectureGraph) -> DeploymentPlan:
-        services = [
-            DeploymentPlanService(
-                name=n.id,
-                type=n.type,
-                estimated_ram_gb=0.5 if n.type not in ("database", "search") else 1.0,
-                estimated_cpu=1.0,
-            )
-            for n in graph.nodes
-        ]
-        return DeploymentPlan(
-            services=services,
-            estimated_cost_usd_month=round(len(services) * 8.5, 2),
-            estimated_build_minutes=max(3, len(services) * 2),
-        )
+        from app.services.zerops_pricing import build_deployment_plan
+
+        return build_deployment_plan(graph.nodes, project_core=self._project_core)
 
 
 class YamlGeneratorService(BaseService):

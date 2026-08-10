@@ -21,7 +21,7 @@ def bootstrap(settings: Settings | None = None) -> None:
 
     service_registry.register("github", GitHubService(settings))
     service_registry.register("analysis", AnalysisService())
-    service_registry.register("planner", PlannerService())
+    service_registry.register("planner", PlannerService(project_core=settings.zerops_project_core))
     service_registry.register(
         "yaml_generator",
         YamlGeneratorService(settings.templates_dir, search_heavy=settings.search_heavy_stack),

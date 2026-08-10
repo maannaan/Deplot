@@ -35,12 +35,18 @@ class DeploymentPlanService(BaseModel):
     type: str
     estimated_ram_gb: float = 0.5
     estimated_cpu: float = 1.0
+    estimated_disk_gb: float = 1.0
+    cpu_mode: str = "shared"
+    estimated_cost_usd_month: float = 0.0
 
 
 class DeploymentPlan(BaseModel):
     services: list[DeploymentPlanService] = Field(default_factory=list)
     estimated_cost_usd_month: float = 0.0
     estimated_build_minutes: int = 5
+    project_core_usd_month: float = 0.0
+    pricing_source: str = "zerops_official_rates"
+    pricing_note: str | None = None
 
 
 class DeploymentScore(BaseModel):

@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     zerops_api_base: str = "https://api.app-prg1.zerops.io/api/rest/public"
     zcli_path: str = ""
     search_heavy_stack: bool = True
+    zerops_project_core: str = Field(
+        default="lightweight",
+        validation_alias=AliasChoices(
+            "DEPLOT_PROJECT_CORE", "ZEROPS_PROJECT_CORE", "zerops_project_core"
+        ),
+        description="lightweight (free) or serious ($10/mo) — Zerops project core tier for cost estimates",
+    )
 
     prompts_dir: Path = REPO_ROOT / "prompts"
     templates_dir: Path = REPO_ROOT / "templates"
