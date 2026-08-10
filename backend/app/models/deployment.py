@@ -84,6 +84,10 @@ class DeploymentStatusResponse(BaseModel):
     pipeline_state: str | None = None
     message: str | None = None
     demo_mode: bool = False
+    failure_phase: str | None = None
+    failure_summary: str | None = None
+    retry_from: str | None = None
+    deploy_ui_stage_index: int | None = None
 
 
 class Deployment(BaseModel):
@@ -98,6 +102,8 @@ class Deployment(BaseModel):
     routing_checklist: list[str] = Field(default_factory=list)
     pipeline_state: str | None = None
     zerops_message: str | None = None
+    failure_phase: str | None = None
+    failure_summary: str | None = None
     stage: DeploymentStage = DeploymentStage.QUEUED
     status: DeploymentStatus = DeploymentStatus.PENDING
     plan: DeploymentPlan | None = None
@@ -116,3 +122,7 @@ class DeployResponse(BaseModel):
     deployment_id: UUID
     status: DeploymentStatus
     stage: DeploymentStage
+
+
+class RetryDeployRequest(BaseModel):
+    from_phase: str = "pipeline"  # import | pipeline

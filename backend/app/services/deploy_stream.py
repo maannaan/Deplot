@@ -59,17 +59,20 @@ async def stream_deployment_sse(
             poll = 0.6
         else:
             poll = poll_seconds
-            api_host = deployment.service_hostnames.get("api", "")
+            import_msg = deployment.zerops_message
+            if tick == 0 and import_msg:
+                new_lines = [import_msg[:500], *new_lines]
+            elif deployment.status == DeploymentStatus.FAILED and deployment.failure_phase == "import":
+                api_host = ""
+            else:
+                api_host = deployment.service_hostnames.get("api", "")
             if api_host:
                 all_logs = await zerops.fetch_logs(
                     api_host, tail=200, project_id=deployment.zerops_project_id
                 )
                 if seen_logs < len(all_logs):
-                    new_lines = all_logs[seen_logs:]
+                    new_lines = [*new_lines, *all_logs[seen_logs:]]
                     seen_logs = len(all_logs)
-            import_msg = deployment.zerops_message
-            if tick == 0 and import_msg:
-                new_lines = [import_msg[:500], *new_lines]
 
         for line in new_lines:
             yield _sse("log", {"line": line, "service": "api"})

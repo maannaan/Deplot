@@ -125,10 +125,15 @@ export default function HomePage() {
     routing_checklist?: string[];
     pipeline_state?: string;
     status?: string;
+    failure_phase?: string;
+    failure_summary?: string;
+    retry_from?: string;
+    deploy_ui_stage_index?: number;
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deployStage, setDeployStage] = useState(0);
+  const [deployFailed, setDeployFailed] = useState(false);
   const [deployLogs, setDeployLogs] = useState<string[]>([]);
   const [maxReachedIndex, setMaxReachedIndex] = useState(0);
 
@@ -136,6 +141,10 @@ export default function HomePage() {
     const idx = getStepIndex(id);
     setMaxReachedIndex((prev) => Math.max(prev, idx));
     setStep(id);
+  }, []);
+
+  const unlockWatchAndHeal = useCallback(() => {
+    setMaxReachedIndex((prev) => Math.max(prev, getStepIndex("incidents")));
   }, []);
 
   const goToStep = useCallback((id: WizardStepId) => {
@@ -283,21 +292,51 @@ export default function HomePage() {
     }
   }, [sessionId, advanceToStep]);
 
-  const runDeploy = useCallback(async () => {
-    if (!sessionId) return;
-    setLoading(true);
-    setError(null);
-    setHealed(false);
-    setDeployStatus(null);
-    setDeployLogs([]);
-    advanceToStep("deploy");
-    setDeployStage(0);
-    try {
-      const res = await api.deploy(sessionId, demoMode);
-      setDeploymentId(res.deployment_id);
+  const applyDeploymentOutcome = useCallback(
+    async (id: string) => {
+      let finalStatus: typeof deployStatus = null;
 
-      await new Promise<void>((resolve) => {
-        const es = new EventSource(deploymentStreamUrl(res.deployment_id));
+      if (demoMode) {
+        unlockWatchAndHeal();
+        setDeployStage(DEPLOY_STAGES.length - 1);
+        setIncidents((await api.listIncidents(id)) as IncidentData[]);
+        await loadObservability();
+        return null;
+      }
+
+      for (let attempt = 0; attempt < 20; attempt++) {
+        const st = await api.getDeploymentStatus(id);
+        setDeployStatus(st);
+        finalStatus = st;
+        if (st.status === "succeeded" || st.status === "failed") break;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+
+      const failed = finalStatus?.status === "failed";
+      setDeployFailed(failed);
+      if (failed) {
+        const failedIndex =
+          typeof finalStatus?.deploy_ui_stage_index === "number"
+            ? finalStatus.deploy_ui_stage_index
+            : DEPLOY_STAGES.length - 2;
+        setDeployStage(failedIndex);
+        unlockWatchAndHeal();
+      } else {
+        setDeployStage(DEPLOY_STAGES.length - 1);
+        unlockWatchAndHeal();
+      }
+
+      setIncidents((await api.listIncidents(id)) as IncidentData[]);
+      await loadObservability();
+      return finalStatus;
+    },
+    [demoMode, loadObservability, unlockWatchAndHeal],
+  );
+
+  const watchDeploymentStream = useCallback(
+    (id: string) =>
+      new Promise<void>((resolve) => {
+        const es = new EventSource(deploymentStreamUrl(id));
         const finish = () => {
           es.close();
           resolve();
@@ -321,34 +360,72 @@ export default function HomePage() {
               stage?: string;
             };
             setDeployStatus((prev) => ({ ...prev, ...data }));
+            if (data.status === "failed") {
+              setDeployFailed(true);
+            }
           } catch {
             /* ignore */
           }
         });
-        es.addEventListener("done", () => {
-          setDeployStage(DEPLOY_STAGES.length - 1);
+        es.addEventListener("done", (ev) => {
+          try {
+            const data = JSON.parse(ev.data) as { status?: string };
+            if (data.status !== "failed") {
+              setDeployStage(DEPLOY_STAGES.length - 1);
+            }
+          } catch {
+            /* ignore */
+          }
           finish();
         });
         es.addEventListener("end", finish);
         es.onerror = finish;
-      });
+      }),
+    [],
+  );
 
-      if (!demoMode) {
-        for (let attempt = 0; attempt < 20; attempt++) {
-          const st = await api.getDeploymentStatus(res.deployment_id);
-          setDeployStatus(st);
-          if (st.status === "succeeded" || st.status === "failed") break;
-          await new Promise((r) => setTimeout(r, 2000));
-        }
-      }
-      setIncidents((await api.listIncidents(res.deployment_id)) as IncidentData[]);
-      await loadObservability();
+  const runDeploy = useCallback(async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    setError(null);
+    setHealed(false);
+    setDeployStatus(null);
+    setDeployLogs([]);
+    setDeployFailed(false);
+    advanceToStep("deploy");
+    setDeployStage(0);
+    try {
+      const res = await api.deploy(sessionId, demoMode);
+      setDeploymentId(res.deployment_id);
+      await watchDeploymentStream(res.deployment_id);
+      await applyDeploymentOutcome(res.deployment_id);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Deploy failed");
     } finally {
       setLoading(false);
     }
-  }, [sessionId, demoMode, advanceToStep, loadObservability]);
+  }, [sessionId, demoMode, advanceToStep, watchDeploymentStream, applyDeploymentOutcome]);
+
+  const retryFromPhase = useCallback(
+    async (fromPhase: "import" | "pipeline") => {
+      if (!deploymentId) return;
+      setLoading(true);
+      setError(null);
+      setDeployFailed(false);
+      setDeployLogs([]);
+      setDeployStage(0);
+      try {
+        await api.retryDeploy(deploymentId, fromPhase);
+        await watchDeploymentStream(deploymentId);
+        await applyDeploymentOutcome(deploymentId);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Retry failed");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [deploymentId, watchDeploymentStream, applyDeploymentOutcome],
+  );
 
   const loadScore = useCallback(async () => {
     if (!deploymentId) return;
@@ -595,7 +672,12 @@ export default function HomePage() {
                 {isPreviewStep && <PreviewBanner />}
                 <Card>
                   <ul className="space-y-3">
-                    {DEPLOY_STAGES.map((s, i) => (
+                    {DEPLOY_STAGES.map((s, i) => {
+                      const failedHere = deployFailed && i === deployStage;
+                      const completed = !deployFailed && i < deployStage;
+                      const active = !deployFailed && i === deployStage && loading;
+                      const failedComplete = deployFailed && i < deployStage;
+                      return (
                       <motion.li
                         key={s}
                         initial={{ opacity: 0, x: -8 }}
@@ -605,23 +687,32 @@ export default function HomePage() {
                       >
                         <span
                           className={
-                            i < deployStage
+                            failedHere
+                              ? "text-red-400"
+                              : completed || failedComplete
                               ? "text-emerald-400"
-                              : i === deployStage
+                              : active
                                 ? "text-indigo-400"
                                 : "text-zinc-600"
                           }
                         >
-                          {i < deployStage ? "✓" : i === deployStage ? "●" : "○"}
+                          {failedHere ? "✕" : completed || failedComplete ? "✓" : active ? "●" : "○"}
                         </span>
                         <span
                           className={
-                            i <= deployStage ? "text-zinc-200" : "text-zinc-600"
+                            failedHere
+                              ? "text-red-300"
+                              : i <= deployStage
+                                ? "text-zinc-200"
+                                : "text-zinc-600"
                           }
                         >
                           {s}
+                          {failedHere && (
+                            <span className="ml-2 text-xs text-red-400/90">failed here</span>
+                          )}
                         </span>
-                        {i === deployStage && loading && (
+                        {active && (
                           <span className="h-1 flex-1 overflow-hidden rounded-full bg-white/5">
                             <motion.span
                               className="block h-full w-1/3 rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 shimmer"
@@ -631,7 +722,8 @@ export default function HomePage() {
                           </span>
                         )}
                       </motion.li>
-                    ))}
+                      );
+                    })}
                   </ul>
                 </Card>
                 {deployLogs.length > 0 && (
@@ -642,6 +734,49 @@ export default function HomePage() {
                     <pre className="mt-3 max-h-48 overflow-auto rounded-lg bg-black/40 p-3 font-mono text-xs text-zinc-400">
                       {deployLogs.join("\n")}
                     </pre>
+                  </Card>
+                )}
+                {deployFailed && deployStatus && (
+                  <Card className="mt-4 border-red-500/30">
+                    <p className="text-xs font-medium uppercase tracking-wider text-red-400">
+                      Deployment failed — AI diagnosis
+                    </p>
+                    <p className="mt-2 text-sm text-zinc-200">
+                      {deployStatus.failure_summary ??
+                        "Zerops import or pipeline failed. Review the log below."}
+                    </p>
+                    {deployStatus.failure_phase && (
+                      <p className="mt-2 text-xs text-zinc-500">
+                        Failed phase:{" "}
+                        <span className="text-zinc-300">{deployStatus.failure_phase}</span>
+                        {deployStatus.pipeline_state
+                          ? ` · Pipeline: ${deployStatus.pipeline_state}`
+                          : ""}
+                      </p>
+                    )}
+                    {incidents[0] && (
+                      <div className="mt-4">
+                        <IncidentPanel incident={incidents[0]} />
+                      </div>
+                    )}
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      {deployStatus.failure_phase === "import" && (
+                        <Button loading={loading} onClick={() => retryFromPhase("import")}>
+                          Retry from import
+                        </Button>
+                      )}
+                      {deployStatus.failure_phase !== "import" && (
+                        <Button loading={loading} onClick={() => retryFromPhase("pipeline")}>
+                          Retry pipeline
+                        </Button>
+                      )}
+                      <Button variant="secondary" onClick={() => advanceToStep("operate")}>
+                        Open observability anyway
+                      </Button>
+                      <Button variant="secondary" onClick={() => advanceToStep("incidents")}>
+                        View full AIOps report
+                      </Button>
+                    </div>
                   </Card>
                 )}
                 {deployStatus && !demoMode && (
@@ -689,7 +824,7 @@ export default function HomePage() {
                     )}
                   </Card>
                 )}
-                {!loading && (
+                {!loading && !deployFailed && (
                   <div className="mt-6">
                     <Button onClick={() => advanceToStep("operate")} disabled={isPreviewStep}>
                       Open Observability

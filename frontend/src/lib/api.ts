@@ -97,7 +97,20 @@ export const api = {
       pipeline_state?: string;
       message?: string;
       demo_mode?: boolean;
+      failure_phase?: string;
+      failure_summary?: string;
+      retry_from?: string;
+      deploy_ui_stage_index?: number;
     }>(`/deployment/${id}/status`),
+
+  retryDeploy: (deploymentId: string, fromPhase: "import" | "pipeline") =>
+    request<{ deployment_id: string; status: string; stage: string }>(
+      `/deploy/${deploymentId}/retry`,
+      {
+        method: "POST",
+        body: JSON.stringify({ from_phase: fromPhase }),
+      },
+    ),
 
   getObservability: (id: string) =>
     request<Record<string, unknown>>(`/deployment/${id}/observability`),

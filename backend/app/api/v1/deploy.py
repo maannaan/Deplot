@@ -16,6 +16,13 @@ from app.models.deployment import (
     DeploymentStage,
     DeploymentStatus,
     DeploymentStatusResponse,
+    RetryDeployRequest,
+)
+from app.services.deploy_failure import (
+    classify_import_failure,
+    classify_pipeline_failure,
+    retry_from_phase,
+    stage_to_ui_index,
 )
 from app.services.deploy_stream import stream_deployment_sse
 from app.services.timeline import record_ops_event
@@ -38,6 +45,140 @@ def _stack_summary(session) -> str:
         f"search={s.search}",
     ]
     return ", ".join(p for p in parts if p.split("=")[-1] not in ("None", ""))
+
+
+def _status_response(deployment: Deployment) -> DeploymentStatusResponse:
+    return DeploymentStatusResponse(
+        deployment_id=deployment.id,
+        status=deployment.status,
+        stage=deployment.stage,
+        live_url=deployment.live_url,
+        service_urls=deployment.service_urls,
+        service_hostnames=deployment.service_hostnames,
+        routing_checklist=deployment.routing_checklist,
+        pipeline_state=deployment.pipeline_state,
+        message=deployment.zerops_message,
+        demo_mode=deployment.demo_mode,
+        failure_phase=deployment.failure_phase,
+        failure_summary=deployment.failure_summary,
+        retry_from=retry_from_phase(deployment.failure_phase) if deployment.failure_phase else None,
+        deploy_ui_stage_index=stage_to_ui_index(
+            deployment.stage, failure_phase=deployment.failure_phase
+        ),
+    )
+
+
+def _clear_failure(deployment: Deployment) -> None:
+    deployment.failure_phase = None
+    deployment.failure_summary = None
+
+
+async def _mark_import_failure(
+    deployment: Deployment,
+    *,
+    result: dict,
+    session,
+    config,
+    aiops,
+    zerops_svc,
+    target_project: str | None,
+    slug: str,
+) -> None:
+    phase, summary = classify_import_failure(result)
+    deployment.status = DeploymentStatus.FAILED
+    deployment.stage = DeploymentStage.FAILED
+    deployment.pipeline_state = "import_failed"
+    deployment.failure_phase = phase
+    deployment.failure_summary = summary
+    deployment.zerops_message = (result.get("stderr") or "")[:2000] or result.get("error") or summary
+    record_ops_event(
+        deployment.id,
+        source="deploy",
+        event_type="import_failed",
+        message=summary,
+        service="platform",
+    )
+    logs = [
+        result.get("stderr") or "",
+        result.get("stdout") or "",
+        result.get("error") or summary,
+    ]
+    logs = [line for line in logs if line]
+    await aiops.create_incident_from_failure(
+        deployment.id,
+        title="Zerops service import failed",
+        logs=logs,
+        stack_summary=_stack_summary(session),
+        yaml_excerpt=config.import_yaml[:3000],
+    )
+
+
+async def _apply_import_success(
+    deployment: Deployment,
+    *,
+    result: dict,
+    zerops_svc,
+    target_project: str | None,
+    slug: str,
+) -> None:
+    deployment.status = DeploymentStatus.IN_PROGRESS
+    deployment.stage = DeploymentStage.PROVISIONING_DB
+    deployment.pipeline_state = "imported"
+    deployment.routing_checklist = result.get("routing_checklist") or []
+    _clear_failure(deployment)
+    record_ops_event(
+        deployment.id,
+        source="deploy",
+        event_type="import_succeeded",
+        message="Zerops service import completed — pipelines starting",
+        service="platform",
+    )
+    urls = await zerops_svc.get_service_urls(
+        {"web": f"{slug}-web", "api": f"{slug}-api"},
+        target_project,
+    )
+    deployment.service_urls = urls
+    deployment.live_url = urls.get("web") or urls.get("api")
+
+
+async def _run_live_import(
+    deployment: Deployment,
+    *,
+    session,
+    config,
+    zerops_svc,
+    aiops,
+    target_project: str | None,
+    slug: str,
+) -> None:
+    result = await zerops_svc.deploy(
+        config,
+        demo_mode=False,
+        project_id=target_project,
+        repo_slug=slug,
+    )
+    deployment.zerops_message = (result.get("stdout") or "")[:2000] or result.get("error")
+    deployment.routing_checklist = result.get("routing_checklist") or []
+
+    if result.get("ok"):
+        await _apply_import_success(
+            deployment,
+            result=result,
+            zerops_svc=zerops_svc,
+            target_project=target_project,
+            slug=slug,
+        )
+    else:
+        await _mark_import_failure(
+            deployment,
+            result=result,
+            session=session,
+            config=config,
+            aiops=aiops,
+            zerops_svc=zerops_svc,
+            target_project=target_project,
+            slug=slug,
+        )
 
 
 @router.post("/deploy", response_model=DeployResponse)
@@ -101,53 +242,15 @@ async def start_deploy(body: DeployRequest):
             repo_slug=slug,
         )
     else:
-        result = await zerops_svc.deploy(
-            config,
-            demo_mode=False,
-            project_id=target_project,
-            repo_slug=slug,
+        await _run_live_import(
+            deployment,
+            session=session,
+            config=config,
+            zerops_svc=zerops_svc,
+            aiops=aiops,
+            target_project=target_project,
+            slug=slug,
         )
-        deployment.zerops_message = (result.get("stdout") or "")[:2000] or result.get("error")
-        deployment.routing_checklist = result.get("routing_checklist") or []
-        deployment.pipeline_state = "imported" if result.get("ok") else "import_failed"
-
-        if result.get("ok"):
-            deployment.status = DeploymentStatus.IN_PROGRESS
-            deployment.stage = DeploymentStage.PROVISIONING_DB
-            record_ops_event(
-                deployment.id,
-                source="deploy",
-                event_type="import_succeeded",
-                message="Zerops service import completed — pipelines starting",
-                service="platform",
-            )
-            urls = await zerops_svc.get_service_urls(
-                {"web": f"{slug}-web", "api": f"{slug}-api"},
-                target_project,
-            )
-            deployment.service_urls = urls
-            deployment.live_url = urls.get("web") or urls.get("api")
-        else:
-            deployment.status = DeploymentStatus.FAILED
-            deployment.stage = DeploymentStage.FAILED
-            record_ops_event(
-                deployment.id,
-                source="deploy",
-                event_type="import_failed",
-                message=deployment.zerops_message or "Zerops service import failed",
-                service="platform",
-            )
-            logs = await zerops_svc.fetch_logs(f"{slug}-api", tail=100, project_id=target_project)
-            if not logs:
-                logs = [result.get("stderr") or result.get("error") or "Import failed"]
-            await aiops.create_incident_from_failure(
-                deployment.id,
-                title="Zerops service import failed",
-                logs=logs,
-                stack_summary=_stack_summary(session),
-                yaml_excerpt=config.import_yaml[:3000],
-            )
-
         deployment_store.save(deployment)
 
     return DeployResponse(
@@ -173,18 +276,18 @@ async def get_deployment_status(deployment_id: UUID):
 
     zerops_svc = get_service("zerops")
     aiops = get_service("aiops")
-    message = deployment.zerops_message
-    pipeline_state = deployment.pipeline_state
 
     if not deployment.demo_mode and deployment.status == DeploymentStatus.IN_PROGRESS:
         api_host = deployment.service_hostnames.get("api", "")
         if api_host:
             pipe = await zerops_svc.get_pipeline_status(api_host, deployment.zerops_project_id)
             deployment.stage = pipe.get("stage", deployment.stage)
-            pipeline_state = str(pipe.get("state", pipeline_state))
+            pipeline_state = str(pipe.get("state", deployment.pipeline_state))
+            deployment.pipeline_state = pipeline_state
             if pipe.get("stage") == DeploymentStage.COMPLETE:
                 deployment.status = DeploymentStatus.SUCCEEDED
                 deployment.stage = DeploymentStage.COMPLETE
+                _clear_failure(deployment)
                 urls = await zerops_svc.get_service_urls(
                     {
                         "web": deployment.service_hostnames.get("frontend", ""),
@@ -199,6 +302,9 @@ async def get_deployment_status(deployment_id: UUID):
                 logs = await zerops_svc.fetch_logs(
                     api_host, tail=80, project_id=deployment.zerops_project_id
                 )
+                phase, summary = classify_pipeline_failure(deployment.stage, logs)
+                deployment.failure_phase = phase
+                deployment.failure_summary = summary
                 session = session_store.get(deployment.session_id)
                 existing = await aiops.list_incidents(deployment_id)
                 if not existing and session:
@@ -209,49 +315,63 @@ async def get_deployment_status(deployment_id: UUID):
                         stack_summary=_stack_summary(session),
                         yaml_excerpt=(deployment.config.import_yaml if deployment.config else "")[:3000],
                     )
-        deployment.pipeline_state = pipeline_state
         deployment.updated_at = datetime.utcnow()
         deployment_store.save(deployment)
 
-    return DeploymentStatusResponse(
-        deployment_id=deployment.id,
-        status=deployment.status,
-        stage=deployment.stage,
-        live_url=deployment.live_url,
-        service_urls=deployment.service_urls,
-        service_hostnames=deployment.service_hostnames,
-        routing_checklist=deployment.routing_checklist,
-        pipeline_state=pipeline_state,
-        message=message,
-        demo_mode=deployment.demo_mode,
-    )
+    return _status_response(deployment)
 
 
 @router.post("/deploy/{deployment_id}/redeploy", response_model=DeployResponse)
-async def redeploy(deployment_id: UUID):
+async def redeploy(deployment_id: UUID, body: RetryDeployRequest | None = None):
+    return await retry_deploy(deployment_id, body or RetryDeployRequest(from_phase="pipeline"))
+
+
+@router.post("/deploy/{deployment_id}/retry", response_model=DeployResponse)
+async def retry_deploy(deployment_id: UUID, body: RetryDeployRequest):
     deployment = deployment_store.get(deployment_id)
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
+    if not deployment.config:
+        raise HTTPException(status_code=400, detail="Deployment has no Zerops config to retry")
+
+    session = session_store.get(deployment.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
 
     aiops = get_service("aiops")
     zerops_svc = get_service("zerops")
     await aiops.resolve_all_for_deployment(deployment_id)
 
+    slug = deployment.repo_slug or "app"
+    _clear_failure(deployment)
     deployment.status = DeploymentStatus.IN_PROGRESS
-    deployment.stage = DeploymentStage.BUILDING
-    deployment_store.save(deployment)
+    deployment.updated_at = datetime.utcnow()
 
     if deployment.demo_mode:
         deployment.status = DeploymentStatus.SUCCEEDED
         deployment.stage = DeploymentStage.COMPLETE
         deployment.live_url = deployment.live_url or "https://demo-app.zerops.app"
+        deployment.pipeline_state = "simulated"
+    elif body.from_phase == "import":
+        deployment.stage = DeploymentStage.BUILDING
+        deployment.pipeline_state = "retrying_import"
+        deployment_store.save(deployment)
+        await _run_live_import(
+            deployment,
+            session=session,
+            config=deployment.config,
+            zerops_svc=zerops_svc,
+            aiops=aiops,
+            target_project=deployment.zerops_project_id,
+            slug=slug,
+        )
     else:
-        slug = deployment.repo_slug or "app"
+        deployment.stage = DeploymentStage.BUILDING
+        deployment.pipeline_state = "redeploying"
         for hostname in (f"{slug}-web", f"{slug}-api"):
             await zerops_svc.trigger_redeploy(hostname, deployment.zerops_project_id)
         deployment.stage = DeploymentStage.READINESS_CHECK
         deployment.status = DeploymentStatus.IN_PROGRESS
-        deployment.pipeline_state = "redeploying"
         urls = await zerops_svc.get_service_urls(
             {"web": f"{slug}-web", "api": f"{slug}-api"},
             deployment.zerops_project_id,
@@ -260,6 +380,13 @@ async def redeploy(deployment_id: UUID):
         deployment.live_url = urls.get("web") or urls.get("api")
 
     deployment_store.save(deployment)
+    record_ops_event(
+        deployment_id,
+        source="deploy",
+        event_type="retry",
+        message=f"Retry from {body.from_phase} phase",
+        service="platform",
+    )
 
     return DeployResponse(
         deployment_id=deployment.id,
