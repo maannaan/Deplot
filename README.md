@@ -294,8 +294,12 @@ cp .env.example .env
 | `ZEROPS_PROJECT_ID` | Platform project (Deplot itself) |
 | `ZEROPS_DEPLOY_PROJECT_ID` | Sandbox for wizard deploys |
 | `GITHUB_TOKEN` | Optional — higher GitHub rate limits |
+| `POSTGRES_PASSWORD` | Local Docker Postgres only — set in `.env`, never commit |
+| `DATABASE_URL` | Backend persistence — build from local Postgres creds in `.env` |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000/api/v1` |
 
+> **Secrets:** copy `.env.example` → `.env` and fill tokens/passwords locally. Never commit `.env` or paste credentials in README, YAML, or demo recordings.
+>
 > **Zerops GUI note:** custom env keys cannot start with `ZEROPS_`. For the live `api` service, use aliases such as `DEPLOT_API_TOKEN`, `PLATFORM_PROJECT_ID`, `DEPLOY_PROJECT_ID` once the app supports them — or set secrets via your deploy pipeline. Local `.env` may still use `ZEROPS_*`.
 
 ### 2. Data services

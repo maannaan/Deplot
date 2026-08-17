@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
-    database_url: str = "postgresql+asyncpg://deplot:deplot@localhost:5432/deplot"
+    database_url: str = ""
     redis_url: str = "redis://localhost:6379/0"
 
     gemini_api_key: str = ""

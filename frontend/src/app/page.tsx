@@ -85,8 +85,8 @@ const DEMO_INCIDENT: IncidentData = {
   ],
   suggested_remediation: {
     description: "Add DATABASE_URL to api service env",
-    env_changes: { DATABASE_URL: "postgresql://user:pass@postgres:5432/app" },
-    yaml_diff: "+ envVariables:\n+   DATABASE_URL: ${postgres_hostname}",
+    env_changes: { DATABASE_URL: "postgresql://${demo-postgres_hostname}/deplot" },
+    yaml_diff: "+ envSecrets:\n+   DATABASE_URL: postgresql://${demo-postgres_hostname}/deplot",
   },
 };
 
